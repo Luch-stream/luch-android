@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing, in this order:
+//  1. a keystore given in the environment (CI secrets): LUCH_KEYSTORE (path), LUCH_KEYSTORE_PASSWORD, LUCH_KEY_ALIAS,
+//     LUCH_KEY_PASSWORD;
+//  2. the debug key, with -PluchDebugSign (installing over adb during development);
+//  3. otherwise unsigned, as F-Droid builds it (F-Droid signs with its own key).
+def keystore = System.getenv('LUCH_KEYSTORE')
+def debugSign = project.hasProperty('luchDebugSign')
+
+android {
+    namespace 'ru.toxblh.luch'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'ru.toxblh.luch'
+        minSdk 26
+        targetSdk 34
+        versionCode 2
+        versionName '0.2'
+    }
+
+    signingConfigs {
+        if (keystore) {
+            release {
+                storeFile file(keystore)
+                storePassword System.getenv('LUCH_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('LUCH_KEY_ALIAS')
+                keyPassword System.getenv('LUCH_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            if (keystore) {
+                signingConfig signingConfigs.release
+            } else if (debugSign) {
+                signingConfig signingConfigs.debug
+            }
+        }
+    }
+
+    // F-Droid reproducible builds: no build-time stamps or dependency metadata blobs in the APK.
+    dependenciesInfo {
+        includeInApk false
+        includeInBundle false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

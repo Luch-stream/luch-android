@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Luch</string>
+    <string name="notification_text">Ready to receive</string>
+    <string name="toast_connected">Luch: %s connected</string>
+    <string name="status_name">Name: %s</string>
+    <string name="status_address">Address: %1$s, port %2$d</string>
+    <string name="status_connected">Connected senders</string>
+    <string name="status_nearby">Senders nearby</string>
+</resources>

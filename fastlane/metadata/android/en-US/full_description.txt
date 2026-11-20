@@ -1,0 +1,10 @@
+<p>Luch ("ray" in Russian) turns an Android TV, Google TV box or projector into a screen your computer can cast to, the way AirPlay and Chromecast work, but open and built for the lowest delay.</p>
+<p>The receiver is always on and announces itself on the local network (mDNS). The Linux sender, <a href="https://github.com/Toxblh/luch-linux">luch-linux</a>, finds it and mirrors a monitor, a window or a virtual screen, with sound.</p>
+<ul>
+<li>Latency like Moonlight: UDP, no jitter buffer, the newest frame drawn at once, the TV's low-latency decoder modes and its game mode</li>
+<li>Measures the TV's hardware decoders after install and tells the sender which codec it decodes fastest (H.264, HEVC, VP9 or AV1)</li>
+<li>Works when the computer is on a VPN: everything goes over the interface the TV was found on</li>
+<li>Tiny: a few megabytes of memory when idle, no Google services, no network access beyond your local network</li>
+<li>On-screen statistics (press OK), Back ends the session</li>
+</ul>
+<p>The protocol is open: see PROTOCOL.md in the source repository.</p>
