@@ -17,7 +17,7 @@
 
     <application
         android:label="@string/app_name"
-        android:icon="@drawable/ic_luch"
+        android:icon="@mipmap/ic_launcher"
         android:banner="@drawable/banner"
         android:allowBackup="false"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">

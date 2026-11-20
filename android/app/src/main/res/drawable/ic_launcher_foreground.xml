@@ -1,0 +1,35 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- assets/luch.svg (512 px design) scaled into the 66 dp adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:scaleX="0.1695" android:scaleY="0.1695" android:translateX="10.1" android:translateY="8.57">
+        <path android:pathData="M118,396L196,104L436,252Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="118" android:startY="396" android:endX="436" android:endY="104">
+                    <item android:offset="0" android:color="#F2FFF4D6" />
+                    <item android:offset="1" android:color="#40FFB547" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M214,104h204a18,18 0,0 1,18 18v112a18,18 0,0 1,-18 18h-204a18,18 0,0 1,-18 -18v-112a18,18 0,0 1,18 -18z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="196" android:startY="104" android:endX="436" android:endY="252">
+                    <item android:offset="0" android:color="#FFFFE7A6" />
+                    <item android:offset="1" android:color="#FFFF8F3A" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#59FFF6DC" android:pathData="M224,122h184a10,10 0,0 1,10 10v92a10,10 0,0 1,-10 10h-184a10,10 0,0 1,-10 -10v-92a10,10 0,0 1,10 -10z" />
+        <path android:pathData="M44,396a74,74 0,1 0,148 0a74,74 0,1 0,-148 0z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="radial" android:centerX="118" android:centerY="396" android:gradientRadius="74">
+                    <item android:offset="0" android:color="#E6FFE7A8" />
+                    <item android:offset="1" android:color="#00FFE7A8" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:fillColor="#FFFFFFFF" android:pathData="M82,396a36,36 0,1 0,72 0a36,36 0,1 0,-72 0z" />
+        <path android:fillColor="#FFFFC85C" android:pathData="M101,396a17,17 0,1 0,34 0a17,17 0,1 0,-34 0z" />
+    </group>
+</vector>
