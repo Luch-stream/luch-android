@@ -50,3 +50,28 @@ plays a sender with the codec the receiver's bench prefers.
 
 Emulator decoders are software ones: these runs show that the code works on that Android version, not how fast a
 real device decodes.
+
+## Measuring latency
+
+`LatencyMeasure` runs three 8-second sessions from a sender on the same device (picture only, picture and sound,
+picture and sound with `sync`) and logs the receiver's own figures under the tag `LuchMeasure`:
+
+```sh
+ANDROID_SERIAL=emulator-5554 ./gradlew connectedGithubDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=ru.toxblh.luch.LatencyMeasure \
+  -Pandroid.testInstrumentationRunnerArguments.measure=true
+adb logcat -d -s LuchMeasure:I
+```
+
+On the emulators (2026-11-21, HEVC 1080p30, software decoder `OMX.google.hevc.decoder`, no network in between):
+
+| Android | picture: decode | sound behind the picture | picture with `sync` |
+|---|---|---|---|
+| 5.0 | 7.7 ms | 46 ms (the buffer cannot be cut) | 7.6 + 46 = about 54 ms |
+| 8.0 | 8.8 ms | 20 ms | 9.2 + 20 = about 29 ms |
+
+What these are and are not: `decode` is from the frame entering the decoder to its picture coming out; the network
+(a few ms on Wi-Fi), the sender's capture and encode, and the display's own delay come on top. The sound figure is
+the receiver's audio buffer; the device's mixer and output add more, differently on every device, and the emulator
+runs with `-no-audio`. On a real TV the hardware decoder decides the picture figure (about 6 ms on the MStar
+projector Luch was built on); on Android 5 and 6 the system's audio buffer decides the sound one.
