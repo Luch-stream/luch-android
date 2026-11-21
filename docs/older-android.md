@@ -4,13 +4,13 @@ The receiver needs **Android 8.0** (`minSdk 26`). It can go down to **Android 5.
 TV release: hardware MediaCodec decoders, Opus and SurfaceView are all there. Nobody on the project has hardware
 older than Android 14, so this file says what to change and how to check it without such a TV.
 
-The list comes from `lintRelease` run with `minSdk 21` (NewApi and InlinedApi issues). Run it again after any change
+The list comes from `lintGithubRelease` run with `minSdk 21` (NewApi and InlinedApi issues). Run it again after any change
 to the code: it is the source of truth, this file is not.
 
 ```sh
 cd android
 sed -i.bak 's/minSdk 26/minSdk 21/' app/build.gradle    # the target you want
-./gradlew lintRelease                                    # then read app/build/reports/lint-results-release.html
+./gradlew lintGithubRelease                              # then read app/build/reports/lint-results-githubRelease.html
 mv app/build.gradle.bak app/build.gradle
 ```
 
@@ -64,13 +64,13 @@ SDK=~/Library/Android/sdk
 $SDK/cmdline-tools/latest/bin/sdkmanager "system-images;android-24;default;arm64-v8a"
 echo no | $SDK/cmdline-tools/latest/bin/avdmanager create avd -n luch-24 -k "system-images;android-24;default;arm64-v8a"
 $SDK/emulator/emulator -avd luch-24 -no-window -no-audio -gpu swiftshader_indirect &
-cd android && ANDROID_SERIAL=emulator-5554 ./gradlew connectedDebugAndroidTest
+cd android && ANDROID_SERIAL=emulator-5554 ./gradlew connectedGithubDebugAndroidTest
 ```
 
 What to check on each level you claim:
 
-1. `./gradlew lintRelease` has no NewApi errors.
-2. `connectedDebugAndroidTest` passes (`MirrorStartTest`: a start with the screen asleep, a screen closed before the
+1. `./gradlew lintGithubRelease` has no NewApi errors.
+2. `connectedGithubDebugAndroidTest` passes (`MirrorStartTest`: a start with the screen asleep, a screen closed before the
    first picture, Back).
 3. By hand, with `tools/testsend.py <emulator address>` or a real sender: the status screen opens, the service
    announces itself (`adb shell dumpsys activity services ru.toxblh.luch`), a stream shows a picture, and **audio

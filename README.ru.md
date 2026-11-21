@@ -32,6 +32,11 @@ adb shell appops set ru.toxblh.luch SYSTEM_ALERT_WINDOW allow
 
 **Luch** в списке приложений ТВ показывает имя и адрес ТВ, подключённых и найденных в сети отправителей.
 
+
+APK со страницы Releases обновляется сам: раз в день проверяет GitHub и предлагает новую версию на этом экране. Первое
+обновление Android попросит подтвердить (и разрешить Luch устанавливать приложения), следующие ставятся сами, пока
+ничего не играет. Сборки из F-Droid или магазина обновляет магазин. Подробности: [docs/updates.md](docs/updates.md).
+
 ## Вместе с luch-linux
 
 Поставьте [luch-linux](https://github.com/Toxblh/luch-linux) на компьютер:
@@ -58,9 +63,12 @@ JDK 17 и Android SDK (platform 34):
 
 ```sh
 cd android
-./gradlew assembleRelease                    # без подписи, как собирает F-Droid
-./gradlew assembleRelease -PluchDebugSign    # с debug-ключом, для adb install
+./gradlew assembleFdroidRelease                    # без подписи, как собирает F-Droid (без самообновления)
+./gradlew assembleGithubRelease -PluchDebugSign    # с debug-ключом, для adb install
 ```
+
+Сборок три: `github` (APK со страницы Releases, обновляет себя сам), `fdroid` и `play` (их обновляет магазин; кода
+и разрешения для самообновления в них нет).
 
 Клипы для замера декодеров в `android/app/src/main/assets/bench` делает `tools/gen_bench.sh` (тестовая таблица
 ffmpeg); `tools/testsend.py <ip ТВ>` шлёт тестовую картинку на приёмник без luch-linux.

@@ -7,7 +7,12 @@ import android.graphics.Typeface;
 import android.net.ConnectivityManager;
 import android.net.LinkAddress;
 import android.net.LinkProperties;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
+import android.provider.Settings;
+import android.widget.Button;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.widget.LinearLayout;
@@ -18,6 +23,7 @@ import java.net.Inet4Address;
 /** What the receiver is doing: its name and address, the senders connected to it and those announced nearby. */
 public class StatusActivity extends Activity {
     private TextView body;
+    private Button update;
     private final Luch.Listener listener = () -> runOnUiThread(this::render);
 
     @Override
@@ -40,8 +46,14 @@ public class StatusActivity extends Activity {
         body.setLineSpacing(0, 1.3f);
         body.setGravity(Gravity.START);
         body.setPadding(0, dp(24), 0, 0);
+        // Only in the GitHub build, when a newer release is out (Updater).
+        update = new Button(this);
+        update.setVisibility(android.view.View.GONE);
+        update.setOnClickListener(v -> installUpdate());
         root.addView(title);
         root.addView(body);
+        root.addView(update, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
         setContentView(root);
     }
 
@@ -76,6 +88,29 @@ public class StatusActivity extends Activity {
         if (nearby.isEmpty()) sb.append("  —\n");
         for (Luch.Peer p : nearby) sb.append("  • ").append(p.name).append("  ").append(p.address).append('\n');
         body.setText(sb);
+        Updater.Release r = demo ? null : Updater.available;
+        update.setVisibility(r == null ? android.view.View.GONE : android.view.View.VISIBLE);
+        if (r != null) {
+            update.setText(Updater.installing ? getString(R.string.update_installing)
+                    : getString(R.string.update_to, r.version));
+            update.setEnabled(!Updater.installing);
+        }
+    }
+
+    private void installUpdate() {
+        Updater.Release r = Updater.available;
+        if (r == null) return;
+        if (!getPackageManager().canRequestPackageInstalls()) {
+            // Android asks once whether Luch may install apps; some TVs have no page for it.
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (ActivityNotFoundException e) {
+                body.append("\n\n" + getString(R.string.update_allow));
+            }
+            return;
+        }
+        Updater.start(this, r, true);
     }
 
     private static final String DEMO_TV = "Living room TV";

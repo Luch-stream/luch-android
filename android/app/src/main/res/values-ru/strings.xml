@@ -9,4 +9,7 @@
     <string name="status_announced">В сети как «%s»</string>
     <string name="status_announce_failed">Не удалось объявить себя в сети (ошибка %d)</string>
     <string name="status_port_busy">Порт управления занят</string>
+    <string name="update_to">Обновить до %s</string>
+    <string name="update_installing">Обновление…</string>
+    <string name="update_allow">Чтобы обновиться, разрешите Luch устанавливать приложения: Настройки → Приложения → Специальный доступ → Установка неизвестных приложений.</string>
 </resources>

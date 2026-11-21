@@ -19,9 +19,33 @@ android {
         applicationId 'ru.toxblh.luch'
         minSdk 26
         targetSdk 34
-        versionCode 2
-        versionName '0.2'
+        // -PluchVersionCode / -PluchVersionName: only for trying an update on an emulator (docs/updates.md).
+        versionCode Integer.parseInt(String.valueOf(project.findProperty('luchVersionCode') ?: '2'))
+        versionName String.valueOf(project.findProperty('luchVersionName') ?: '0.2')
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    // Where the APK is published decides whether it may update itself:
+    //  - github: the release APK on GitHub, updates itself from GitHub releases (docs/updates.md);
+    //  - fdroid, play: the store updates the app; a self-updater there is against both stores' rules.
+    flavorDimensions 'store'
+    productFlavors {
+        github {
+            dimension 'store'
+            buildConfigField 'boolean', 'SELF_UPDATE', 'true'
+        }
+        fdroid {
+            dimension 'store'
+            buildConfigField 'boolean', 'SELF_UPDATE', 'false'
+        }
+        play {
+            dimension 'store'
+            buildConfigField 'boolean', 'SELF_UPDATE', 'false'
+        }
     }
 
     signingConfigs {

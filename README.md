@@ -33,6 +33,11 @@ adb shell appops set ru.toxblh.luch SYSTEM_ALERT_WINDOW allow
 Opening **Luch** from the TV's app list shows the TV's name and address, the connected senders and the senders
 seen on the network.
 
+The APK from Releases updates itself: it checks GitHub once a day and offers a newer release on that screen. After
+the first update, which Android asks you to confirm (and to allow Luch to install apps), later ones install by
+themselves while nothing is playing. Builds from F-Droid or an app store are updated by the store instead.
+Details: [docs/updates.md](docs/updates.md).
+
 ## Use with luch-linux
 
 Install [luch-linux](https://github.com/Toxblh/luch-linux) on the computer, then:
@@ -58,9 +63,12 @@ JDK 17 and the Android SDK (platform 34):
 
 ```sh
 cd android
-./gradlew assembleRelease                    # unsigned, as F-Droid builds it
-./gradlew assembleRelease -PluchDebugSign    # signed with the debug key, for adb install
+./gradlew assembleFdroidRelease                    # unsigned, as F-Droid builds it (no self-update)
+./gradlew assembleGithubRelease -PluchDebugSign    # signed with the debug key, for adb install
 ```
+
+There are three builds: `github` (the APK on the Releases page, which updates itself), `fdroid` and `play` (the store
+updates them; no self-update code or permission in them).
 
 The decoder benchmark clips in `android/app/src/main/assets/bench` are made by `tools/gen_bench.sh` (ffmpeg's test
 pattern); `tools/testsend.py <tv ip>` sends a test pattern to a receiver without luch-linux.

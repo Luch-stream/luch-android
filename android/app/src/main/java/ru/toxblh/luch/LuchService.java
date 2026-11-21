@@ -57,6 +57,7 @@ public class LuchService extends Service {
         browseSenders();
         // After install or a firmware update there is no measurement yet: take it once things have settled.
         main.postDelayed(() -> Bench.autoRun(this, ControlServer::broadcastBench), 20_000);
+        Updater.schedule(this, main);   // only in the GitHub build
     }
 
     @Override

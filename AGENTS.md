@@ -18,8 +18,11 @@ sides together.
 ## Build and test
 
 - JDK 17 or 21 (Android Studio's `jbr` works). Gradle 8.9 does not run on newer JDKs.
-- `cd android && ./gradlew assembleRelease`: unsigned, as F-Droid builds it; `-PluchDebugSign` signs with the debug key.
-- `ANDROID_SERIAL=<emulator> ./gradlew connectedDebugAndroidTest` on an Android TV emulator (API 34
+- Three builds (product flavors): `github` updates itself from GitHub releases, `fdroid` and `play` never do
+  (`BuildConfig.SELF_UPDATE`; the install permissions are only in `src/github`). See [docs/updates.md](docs/updates.md).
+- `cd android && ./gradlew assembleFdroidRelease`: unsigned, as F-Droid builds it; `assembleGithubRelease
+  -PluchDebugSign` signs with the debug key.
+- `ANDROID_SERIAL=<emulator> ./gradlew connectedGithubDebugAndroidTest` on an Android TV emulator (API 34
   `android-tv;arm64-v8a` works on Apple Silicon). **Always set `ANDROID_SERIAL`**: Gradle otherwise runs the tests on
   every connected device, including a real TV on `adb connect`.
 - Fix a bug test-first when you can: a failing `androidTest` that shows it, then the fix.

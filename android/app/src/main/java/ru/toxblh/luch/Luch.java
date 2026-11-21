@@ -136,7 +136,7 @@ final class Luch {
         LISTENERS.remove(l);
     }
 
-    private static void notifyListeners() {
+    static void notifyListeners() {
         for (Listener l : LISTENERS) l.changed();
     }
 }

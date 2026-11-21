@@ -35,18 +35,21 @@ jobs:
             echo "LUCH_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           fi
 
+      # github: the APK published here, which updates itself from these releases (docs/updates.md);
+      # fdroid: built the way F-Droid builds it (no self-update), to catch breakage early.
       - name: Build debug and release APKs
         env:
           LUCH_KEYSTORE_PASSWORD: ${{ secrets.LUCH_KEYSTORE_PASSWORD }}
           LUCH_KEY_ALIAS: ${{ secrets.LUCH_KEY_ALIAS }}
           LUCH_KEY_PASSWORD: ${{ secrets.LUCH_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleDebug assembleRelease
+        run: ./gradlew --no-daemon assembleGithubDebug assembleGithubRelease assembleFdroidRelease
 
       - name: Name the APKs
         run: |
           mkdir -p ../dist
-          cp app/build/outputs/apk/debug/app-debug.apk ../dist/luch-debug.apk
-          for f in app/build/outputs/apk/release/*.apk; do
+          cp app/build/outputs/apk/github/debug/app-github-debug.apk ../dist/luch-debug.apk
+          # The self-updater looks for luch-release.apk: only a build signed with the release key may carry that name.
+          for f in app/build/outputs/apk/github/release/*.apk; do
             case "$f" in
               *unsigned*) cp "$f" ../dist/luch-release-unsigned.apk ;;
               *) cp "$f" ../dist/luch-release.apk ;;
