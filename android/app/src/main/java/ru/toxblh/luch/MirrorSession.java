@@ -234,6 +234,7 @@ final class MirrorSession {
             }
         } catch (IOException e) {
             if (!ended) Log.i(LuchService.TAG, "video ended: " + e);
+            if (!ended && String.valueOf(e.getMessage()).startsWith("decoder keeps failing")) report("video", e);
         } finally {
             end(null);
         }
@@ -375,6 +376,7 @@ final class MirrorSession {
         }
         if (decoder == null) {
             send("error", "start_failed", "no decoder for " + videoMime);
+            report("no decoder for " + videoMime, null);
             throw new IOException("no decoder for " + videoMime);
         }
         decoderName = decoder.getName();
@@ -419,7 +421,10 @@ final class MirrorSession {
                 }
             }
         } catch (IllegalStateException e) {
-            if (!ended && codec == decoder) Log.w(LuchService.TAG, "render", e);   // a reset decoder ends quietly
+            if (!ended && codec == decoder) {   // a reset decoder ends quietly
+                Log.w(LuchService.TAG, "render", e);
+                report("render", e);
+            }
         }
     }
 
@@ -491,7 +496,10 @@ final class MirrorSession {
                 }
             }
         } catch (IOException | RuntimeException e) {
-            if (!ended) Log.w(LuchService.TAG, "audio", e);
+            if (!ended) {
+                Log.w(LuchService.TAG, "audio", e);
+                report("audio", e);
+            }
         } finally {
             if (track != null) {
                 try {
@@ -631,6 +639,17 @@ final class MirrorSession {
         Log.i(LuchService.TAG, "mirror ended" + (byReceiver != null ? " here (" + byReceiver + ")" : "") + ": in=" + framesIn + " rendered="
                 + framesRendered + " dropped=" + framesDropped + " lost=" + framesLost + " decoder=" + decoderName);
         MirrorActivity.sessionEnded();
+    }
+
+    /** Keeps a report of a failure the person will have noticed, with what the session was doing (Reports). */
+    private void report(String what, Throwable e) {
+        try {
+            Reports.error(context, what, e, new JSONObject()
+                    .put("codec", videoMime).put("width", width).put("height", height).put("fps", fps)
+                    .put("decoder", decoderName).put("audio", audioRate > 0)
+                    .put("frames_in", framesIn).put("rendered", framesRendered).put("lost", framesLost));
+        } catch (JSONException ignored) {
+        }
     }
 
     private void send(String type) {

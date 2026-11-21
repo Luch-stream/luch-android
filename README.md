@@ -45,6 +45,13 @@ luchctl stop "<TV name>"
 
 On the TV, **OK** shows or hides the statistics (latency, bitrate, frames, decoder) and **Back** ends the session.
 
+## Crash reports
+
+When the receiver crashes or a session fails on an error (no decoder, no sound), it keeps a short report on the TV:
+what failed, the stack trace, the Android version, the TV model and the session's settings. No logs, no addresses,
+no names. It gives the reports only to a sender that asks for them, which shows them to you and lets you file them as
+an issue; nothing is sent anywhere by the receiver itself. Details: [PROTOCOL.md](PROTOCOL.md), section 6.
+
 ## Build
 
 JDK 17 and the Android SDK (platform 34):

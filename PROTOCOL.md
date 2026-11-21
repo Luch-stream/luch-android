@@ -109,7 +109,29 @@ when there is no result yet, but only while nothing plays (a video would lose it
 
 Senders: encode `bench.prefer` when they can, else `video/avc`.
 
-## 6. Later versions (reserved)
+## 6. Crash and error reports
+
+The receiver keeps reports of its crashes and of failures the person will have noticed (no decoder, a decoder that
+keeps failing, the picture or the sound stopping on an error): at most 10, a repeat of the same failure only counting
+up. It hands them only to a sender that asks with `"reports"` in the `want` of its hello, right after the welcome; an
+older sender never sees them. The receiver forgets a report once the sender says it has it.
+
+```
+receiver → {"t":"reports","items":[{
+              "id":"<uuid>", "kind":"crash"|"error", "time":<ms since 1970>, "last_time":<ms, on repeats>, "count":N,
+              "what":"<exception or failure>", "thread":"luch-video", "stack":"<Java stack trace, at most 8 KB>",
+              "details":{"codec":"video/hevc","width":1920,"height":1080,"fps":60,"decoder":"..","audio":true,
+                         "frames_in":N,"rendered":N,"lost":N},
+              "app":"0.2", "android":"14", "sdk":34, "device":"<manufacturer> <model>", "hardware":"<board>",
+              "signature":"<what tells two failures apart>"}]}
+sender   → {"t":"reports_taken","ids":["<uuid>",...]}
+```
+
+A report holds no logs, no addresses (IPv4 and IPv6 in messages and stack traces become `<ip>`), no device name
+given by the person and no sender names. The sender decides what to do with it: luchd shows it to its user and offers
+to file it as an issue. Sending reports to a server must stay opt-in on the sender's side.
+
+## 7. Later versions (reserved)
 
 Reed-Solomon FEC shards (the header already has room); pairing with a code shown on the TV; `{"t":"media","url":...}`
 with `play/pause/seek/rate/track/sub` and `state` reports, the TV playing the original file; `{"t":"photo",...}`;

@@ -90,6 +90,13 @@ final class ControlServer {
         }
     }
 
+    /** Whether the sender's hello lists {@code what} in its "want". */
+    private static boolean wants(JSONObject hello, String what) {
+        org.json.JSONArray want = hello.optJSONArray("want");
+        for (int i = 0; want != null && i < want.length(); i++) if (what.equals(want.optString(i))) return true;
+        return false;
+    }
+
     private void serve(Socket s) {
         String peerId = null;
         String peerName = null;
@@ -136,6 +143,12 @@ final class ControlServer {
                         peerName = msg.optString("name", address);
                         send(out, welcome());
                         SENDERS.add(control);
+                        if (wants(msg, "reports")) {
+                            org.json.JSONArray reports = Reports.pending(context);
+                            if (reports.length() > 0) {
+                                send(out, new JSONObject().put("t", "reports").put("items", reports));
+                            }
+                        }
                         Bench.autoRun(context, ControlServer::broadcastBench);
                         Luch.connected(new Luch.Peer(peerId, peerName, address));
                         say(context.getString(R.string.toast_connected, peerName));
@@ -146,6 +159,13 @@ final class ControlServer {
                         break;
                     case "pong":
                     case "stats":
+                        break;
+                    case "reports_taken":
+                        Reports.taken(context, msg.optJSONArray("ids"));
+                        break;
+                    case "error":
+                        // The sender's answer to something of ours; answering it would only bounce errors back.
+                        Log.i(LuchService.TAG, "sender says: " + msg);
                         break;
                     case "sender_stats": {
                         MirrorSession m = MirrorSession.current;
