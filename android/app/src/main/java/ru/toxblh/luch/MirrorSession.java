@@ -8,6 +8,8 @@ import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.media.MediaCodec;
 import android.media.MediaFormat;
+import android.os.Build;
+import android.os.PowerManager;
 import android.os.Process;
 import android.os.SystemClock;
 import android.util.Log;
@@ -60,6 +62,14 @@ final class MirrorSession {
     /** Experiment: ask every decoder to run flat out (KEY_OPERATING_RATE), not only Qualcomm's. */
     private final boolean operatingRate;
     private final int audioRate, audioChannels, audioFrameMs;
+    /**
+     * {"audio":{...,"sync":true}}: hold each picture back by the audio's delay so both come out together. Only worth it
+     * where audio cannot be made short (Android 5 and 6, see Caps.limits); costs that much picture latency.
+     */
+    private final boolean audioSync;
+    /** Set once the audio track exists: how far behind the picture its sound comes out, and the picture's hold. */
+    private volatile int audioLatencyMs;
+    private volatile long videoHoldNs;
     private DatagramSocket videoSocket, audioSocket;
     private volatile boolean ended;
     private volatile Surface surface;
@@ -106,6 +116,7 @@ final class MirrorSession {
         audioRate = a == null ? 0 : a.optInt("rate", 48000);
         audioChannels = a == null ? 0 : a.optInt("channels", 2);
         audioFrameMs = a == null ? 5 : a.optInt("frame_ms", 5);
+        audioSync = a != null && a.optBoolean("sync", false);
     }
 
     /** Opens both sockets and the screen; returns {video port, audio port}. */
@@ -116,11 +127,11 @@ final class MirrorSession {
         s.videoSocket = openSocket();
         s.audioSocket = openSocket();
         current = s;
+        wakeScreen(context);
         thread(s::videoLoop, "luch-video");
         if (s.audioRate > 0) thread(s::audioLoop, "luch-audio");
         thread(s::statsLoop, "luch-stats");
-        context.startActivity(new Intent(context, MirrorActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+        showScreen(context);
         return new int[]{s.videoSocket.getLocalPort(), s.audioSocket.getLocalPort()};
     }
 
@@ -142,6 +153,20 @@ final class MirrorSession {
         Thread t = new Thread(r, name);
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * Before Android 8.1 an activity cannot turn the screen on by itself (FLAG_TURN_SCREEN_ON only works for a window
+     * that is already showing): wake it with a lock, as apps did then. From 8.1 MirrorActivity's setTurnScreenOn does
+     * it (issue #1).
+     */
+    @SuppressWarnings("deprecation")   // SCREEN_BRIGHT_WAKE_LOCK and ACQUIRE_CAUSES_WAKEUP: the way on those versions
+    private static void wakeScreen(Context context) {
+        if (Build.VERSION.SDK_INT >= 27) return;
+        PowerManager pm = Compat.service(context, PowerManager.class);
+        if (pm == null || pm.isInteractive()) return;
+        pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP, "luch:start")
+                .acquire(3_000);   // released by itself; the screen's FLAG_KEEP_SCREEN_ON keeps it on from there
     }
 
     static synchronized void stopFromSender(Control control) {
@@ -406,7 +431,7 @@ final class MirrorSession {
                     framesDropped++;
                     continue;
                 }
-                codec.releaseOutputBuffer(index, System.nanoTime());
+                codec.releaseOutputBuffer(index, System.nanoTime() + videoHoldNs);
                 framesRendered++;
                 long now = System.nanoTime() / 1000;
                 decodeUsSum += now - pts;
@@ -460,12 +485,21 @@ final class MirrorSession {
                     if (dec == null) {
                         dec = opusDecoder(data);
                         track = audioTrack();
-                        // The system may hand out a far larger buffer than asked for (6924 frames, 144 ms, on the
-                        // XGIMI): use only about 20 ms of it, so audio cannot fall behind the picture.
-                        int want = audioRate * Math.max(4 * audioFrameMs, 20) / 1000;
-                        int got = track.setBufferSizeInFrames(want);
-                        Log.i(LuchService.TAG, "audio track: capacity " + track.getBufferCapacityInFrames()
-                                + " frames, using " + got);
+                        int frames;
+                        if (Build.VERSION.SDK_INT >= 24) {
+                            // The system may hand out a far larger buffer than asked for (6924 frames, 144 ms, on the
+                            // XGIMI): use only about 20 ms of it, so audio cannot fall behind the picture.
+                            int want = audioRate * Math.max(4 * audioFrameMs, 20) / 1000;
+                            frames = track.setBufferSizeInFrames(want);
+                            Log.i(LuchService.TAG, "audio track: capacity " + track.getBufferCapacityInFrames()
+                                    + " frames, using " + frames);
+                        } else {
+                            // Android 5 and 6 cannot shorten the buffer: the sound runs this far behind.
+                            frames = trackBytes / (2 * audioChannels);
+                            Log.i(LuchService.TAG, "audio track: " + frames + " frames, cannot be shortened here");
+                        }
+                        audioLatencyMs = frames * 1000 / audioRate;
+                        if (audioSync) videoHoldNs = audioLatencyMs * 1_000_000L;
                         track.play();
                     }
                     continue;
@@ -490,7 +524,12 @@ final class MirrorSession {
                         o.get(pcm, 0, info.size);
                         // The track holds about two frames; when it is full the rest is dropped rather than queued,
                         // so audio never drifts behind the picture.
-                        track.write(pcm, 0, info.size, AudioTrack.WRITE_NON_BLOCKING);
+                        if (Build.VERSION.SDK_INT >= 23) {
+                            track.write(pcm, 0, info.size, AudioTrack.WRITE_NON_BLOCKING);
+                        } else {
+                            o.position(info.offset).limit(info.offset + info.size);   // the byte[] form is Android 6
+                            track.write(o, info.size, AudioTrack.WRITE_NON_BLOCKING);
+                        }
                     }
                     dec.releaseOutputBuffer(out, false);
                 }
@@ -529,11 +568,20 @@ final class MirrorSession {
         return dec;
     }
 
+    /** Size of the track's buffer, in bytes. */
+    private int trackBytes;
+
     private AudioTrack audioTrack() {
         int mask = audioChannels == 1 ? AudioFormat.CHANNEL_OUT_MONO : AudioFormat.CHANNEL_OUT_STEREO;
         int frameBytes = audioRate * audioChannels * 2 * audioFrameMs / 1000;
         int min = AudioTrack.getMinBufferSize(audioRate, mask, AudioFormat.ENCODING_PCM_16BIT);
-        return new AudioTrack.Builder()
+        trackBytes = Math.max(min, frameBytes * 2);
+        if (Build.VERSION.SDK_INT < 23) {
+            // Android 5: no Builder; the stream type stands for the usage.
+            return new AudioTrack(android.media.AudioManager.STREAM_MUSIC, audioRate, mask,
+                    AudioFormat.ENCODING_PCM_16BIT, trackBytes, AudioTrack.MODE_STREAM);
+        }
+        AudioTrack.Builder b = new AudioTrack.Builder()
                 .setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_GAME)
                         .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build())
@@ -541,10 +589,10 @@ final class MirrorSession {
                         .setSampleRate(audioRate)
                         .setChannelMask(mask)
                         .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                .setBufferSizeInBytes(Math.max(min, frameBytes * 2))
-                .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build();
+                .setBufferSizeInBytes(trackBytes)
+                .setTransferMode(AudioTrack.MODE_STREAM);
+        if (Build.VERSION.SDK_INT >= 26) b.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY);
+        return b.build();
     }
 
     private static ByteBuffer leLong(long v) {
@@ -581,9 +629,29 @@ final class MirrorSession {
         return b.toString();
     }
 
+    private static void showScreen(Context context) {
+        context.startActivity(new Intent(context, MirrorActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+    }
+
+    /** Seconds to keep asking for the screen; then the session ends, reason "screen_not_shown". */
+    private static final int SHOW_TRIES = 8;
+    static final String SCREEN_NOT_SHOWN = "screen_not_shown";
+
     private void statsLoop() {
+        int tries = 0;
         while (!ended) {
             SystemClock.sleep(1000);
+            // The system may refuse to open the screen for a while: for 5 s after Home on older Android, or without
+            // the "display over other apps" permission. Ask again each second, then give up saying why.
+            if (surface == null && !MirrorActivity.isShown() && !ended) {
+                if (++tries > SHOW_TRIES) {
+                    end(SCREEN_NOT_SHOWN);
+                    break;
+                }
+                Log.i(LuchService.TAG, "mirror screen not shown yet: asking again");
+                showScreen(context);
+            }
             long count = decodeCount, sum = decodeUsSum;
             decodeCount = 0;
             decodeUsSum = 0;
@@ -605,7 +673,9 @@ final class MirrorSession {
                         .put("lost", framesLost)
                         .put("dropped", framesDropped)
                         .put("shown_seq", shownSeq)
-                        .put("decoder", decoderName));
+                        .put("decoder", decoderName)
+                        .put("audio_latency_ms", audioLatencyMs)
+                        .put("video_hold_ms", videoHoldNs / 1_000_000));
             } catch (JSONException ignored) {
             }
         }

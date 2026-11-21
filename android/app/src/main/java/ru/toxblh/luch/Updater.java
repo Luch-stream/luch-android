@@ -236,8 +236,8 @@ final class Updater {
     private static String latestUrl(Context context) {
         if (BuildConfig.DEBUG) {
             try {
-                String url = new String(java.nio.file.Files.readAllBytes(
-                        new File(context.getFilesDir(), "update-url").toPath()), StandardCharsets.UTF_8).trim();
+                String url = new String(Compat.readFile(new File(context.getFilesDir(), "update-url")),
+                        StandardCharsets.UTF_8).trim();
                 if (!url.isEmpty()) return url;
             } catch (IOException ignored) {
                 // no override
@@ -259,7 +259,7 @@ final class Updater {
     }
 
     private static boolean idle(Context context) {
-        android.media.AudioManager audio = context.getSystemService(android.media.AudioManager.class);
+        android.media.AudioManager audio = Compat.service(context, android.media.AudioManager.class);
         return MirrorSession.current == null && !Bench.running() && (audio == null || !audio.isMusicActive());
     }
 

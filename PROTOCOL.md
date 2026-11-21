@@ -51,18 +51,27 @@ Modelled on Sunshine and Moonlight: UDP, no jitter buffer, loss answered with a 
 
 ```
 sender   → {"t":"start","mode":"mirror","video":{"codec":"video/hevc","width":1920,"height":1080,"fps":60},
-            "audio":{"codec":"audio/opus","rate":48000,"channels":2,"frame_ms":5}}
+            "audio":{"codec":"audio/opus","rate":48000,"channels":2,"frame_ms":5,"sync":false}}
 receiver → {"t":"ready","video_port":P,"audio_port":Q}      or {"t":"error","code":"start_failed","detail":"..."}
 receiver → {"t":"keyframe"}                                 an IDR is needed (start, or after a loss)
-either   → {"t":"stop"} / receiver → {"t":"stop","by":"receiver","reason":"back"|"screen_closed"}
-receiver → {"t":"stats","decode_ms":..,"host_ms":..,"fps":..,"lost":..,"dropped":..,"shown_seq":N,"decoder":".."}
+either   → {"t":"stop"} / receiver → {"t":"stop","by":"receiver","reason":"back"|"screen_closed"|"screen_not_shown"}
+receiver → {"t":"stats","decode_ms":..,"host_ms":..,"fps":..,"lost":..,"dropped":..,"shown_seq":N,"decoder":"..",
+            "audio_latency_ms":N,"video_hold_ms":N}
 sender   → {"t":"sender_stats","rtt_ms":..,"host_ms":..,"fps":..,"mbps":..,"encoder":"..","res":"WxH"}
 ```
 
 The receiver ends a session itself with `reason` `back` (Back on the remote) or `screen_closed` (Home, another app
 on top, or the screen staying off). A TV whose screen is asleep is woken by `start`; the picture may be stopped for a
 moment while the TV wakes up, so a stopped screen gets a second to come back before the session counts as closed,
-and the receiver asks for a `keyframe` for the new surface.
+and the receiver asks for a `keyframe` for the new surface. If the system will not open the screen at all (for 5 s
+after Home on older Android, or without the "display over other apps" permission), the receiver asks again each
+second and after 8 s ends the session with `screen_not_shown`.
+
+**Audio modes.** No `audio`: picture only, the lowest latency. `audio` without `sync`: the sound plays as soon as
+it is decoded, `audio_latency_ms` (stats) after the picture. `"sync":true`: the receiver holds each picture back by
+that much (`video_hold_ms` in stats), so both come out together, at the cost of that much picture latency. On
+Android 7+ the receiver cuts the audio buffer to about 20 ms and `sync` is not worth it; on Android 5 and 6 it
+cannot (`limits` in the welcome, section 5), and the sender should let its user choose between the three.
 
 The sender sends from a socket bound to the LAN interface (section 2); the receiver takes the sender's address from
 the first packet. `codec` should be `bench.prefer` (section 5) when the sender can encode it.
@@ -107,7 +116,17 @@ when there is no result yet, but only while nothing plays (a video would lose it
 `{"t":"bench_result", ...same fields...}` to every connected sender. `{"t":"bench"}` measures now (answered with
 `bench_result`, or `{"t":"error","code":"busy","for":"bench"}` during a session).
 
-Senders: encode `bench.prefer` when they can, else `video/avc`.
+- `sdk`: the Android API level (21 = Android 5.0 ... 34 = Android 14).
+- `limits`: `{"audio_latency_ms":N, "limits":[...]}`, what works worse here than on Android 8.0+, for the sender to
+  show and to pick modes by. `audio_latency_ms` is how long the sound will trail the picture (about 20 on Android 7+).
+  Limits: `audio_lag` (Android 5 and 6: the audio buffer cannot be cut; offer no sound, lagging sound or `sync`),
+  `decoder_low_latency` and `game_mode` (before Android 11: no low-latency decoder flag, no minimal post-processing
+  request to the display), `wifi_low_latency` (before Android 10), `hdr_info` (before 7: HDR support unknown),
+  `display_modes` (Android 5: only the current display mode is listed). Unknown limits are to be shown as is.
+
+Senders: encode `bench.prefer` when they can, else `video/avc`. On Android 5 the AVC decoder may only take the
+Baseline profile (emulators do; real TVs usually decode High in hardware): the bench then reports an
+error for `video/avc` and prefers another codec.
 
 ## 6. Crash and error reports
 

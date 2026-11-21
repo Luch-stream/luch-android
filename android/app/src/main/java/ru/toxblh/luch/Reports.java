@@ -15,7 +15,6 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -65,7 +64,7 @@ final class Reports {
         JSONArray out = new JSONArray();
         for (File f : files(context)) {
             try {
-                out.put(new JSONObject(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8)));
+                out.put(new JSONObject(new String(Compat.readFile(f), StandardCharsets.UTF_8)));
             } catch (IOException | JSONException e) {
                 f.delete();   // unreadable: of no use to anyone
             }
@@ -77,7 +76,8 @@ final class Reports {
     static synchronized void taken(Context context, JSONArray ids) {
         for (int i = 0; ids != null && i < ids.length(); i++) {
             String id = ids.optString(i);
-            if (id.matches("[0-9a-f-]{36}")) new File(dir(context), id + ".json").delete();
+            if (!id.matches("[0-9a-f-]{36}")) continue;
+            for (File f : files(context)) if (f.getName().endsWith("-" + id + ".json")) f.delete();
         }
     }
 
@@ -94,7 +94,7 @@ final class Reports {
             if (stack.length() > MAX_STACK) stack = stack.substring(0, MAX_STACK);
             String signature = kind + "|" + scrub(what) + "|" + firstFrames(stack);
             for (File f : files(context)) {
-                JSONObject old = new JSONObject(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8));
+                JSONObject old = new JSONObject(new String(Compat.readFile(f), StandardCharsets.UTF_8));
                 if (signature.equals(old.optString("signature"))) {
                     old.put("count", old.optInt("count", 1) + 1).put("last_time", System.currentTimeMillis());
                     write(f, old);
@@ -117,7 +117,9 @@ final class Reports {
                     .put("device", Build.MANUFACTURER + " " + Build.MODEL)
                     .put("hardware", Build.HARDWARE)
                     .put("signature", signature);
-            write(new File(dir(context), id + ".json"), r);
+            // The time leads the name: file times are only to the second on older Android, the name keeps the order.
+            write(new File(dir(context), String.format(java.util.Locale.ROOT, "%013d-%s.json",
+                    System.currentTimeMillis(), id)), r);
             File[] all = files(context);
             for (int i = 0; i < all.length - MAX; i++) all[i].delete();
             Log.i(LuchService.TAG, "report kept: " + kind + " " + r.optString("what"));
@@ -163,7 +165,7 @@ final class Reports {
     private static File[] files(Context context) {
         File[] f = dir(context).listFiles((d, name) -> name.endsWith(".json"));
         if (f == null) return new File[0];
-        Arrays.sort(f, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+        Arrays.sort(f, (a, b) -> a.getName().compareTo(b.getName()));
         return f;
     }
 

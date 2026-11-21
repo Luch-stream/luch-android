@@ -86,6 +86,32 @@ final class Caps {
         return false;
     }
 
+    /**
+     * What works worse on this Android version than on 8.0+, for the sender to tell its user and pick a mode:
+     * {"audio_latency_ms":N, "limits":[...]}. docs/older-android.md says what each limit means.
+     */
+    static JSONObject limits() {
+        JSONObject out = new JSONObject();
+        JSONArray l = new JSONArray();
+        try {
+            // Android 7 lets the receiver shorten the audio buffer to about 20 ms; before it, the system's minimum
+            // stays, and the sound comes that much after the picture (or the picture waits, with "sync").
+            int min = android.media.AudioTrack.getMinBufferSize(48000, android.media.AudioFormat.CHANNEL_OUT_STEREO,
+                    android.media.AudioFormat.ENCODING_PCM_16BIT);
+            int ms = Build.VERSION.SDK_INT >= 24 ? 20 : Math.max(20, min / 4 * 1000 / 48000);
+            out.put("audio_latency_ms", ms);
+            if (Build.VERSION.SDK_INT < 24) l.put("audio_lag");
+            if (Build.VERSION.SDK_INT < 30) l.put("decoder_low_latency");     // KEY_LOW_LATENCY is Android 11
+            if (Build.VERSION.SDK_INT < 30) l.put("game_mode");               // minimal post-processing, Android 11
+            if (Build.VERSION.SDK_INT < 29) l.put("wifi_low_latency");        // WIFI_MODE_FULL_LOW_LATENCY, Android 10
+            if (Build.VERSION.SDK_INT < 24) l.put("hdr_info");
+            if (Build.VERSION.SDK_INT < 23) l.put("display_modes");
+            out.put("limits", l);
+        } catch (JSONException ignored) {
+        }
+        return out;
+    }
+
     /** Audio formats there is any decoder for (opus, aac, ac3, eac3, ...). */
     private static JSONArray audio() {
         Set<String> types = new TreeSet<>();
@@ -98,16 +124,23 @@ final class Caps {
 
     private static JSONObject display(Context context) throws JSONException {
         JSONObject out = new JSONObject();
-        Display d = context.getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
+        Display d = Compat.service(context, DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
         if (d == null) return out;
         JSONArray modes = new JSONArray();
-        for (Display.Mode m : d.getSupportedModes()) {
-            modes.put(m.getPhysicalWidth() + "x" + m.getPhysicalHeight() + "@" + Math.round(m.getRefreshRate()));
+        if (Build.VERSION.SDK_INT >= 23) {
+            for (Display.Mode m : d.getSupportedModes()) {
+                modes.put(m.getPhysicalWidth() + "x" + m.getPhysicalHeight() + "@" + Math.round(m.getRefreshRate()));
+            }
+        } else {
+            // Android 5: only the current mode is known.
+            android.graphics.Point size = new android.graphics.Point();
+            d.getRealSize(size);
+            modes.put(Math.max(size.x, size.y) + "x" + Math.min(size.x, size.y) + "@" + Math.round(d.getRefreshRate()));
         }
         out.put("modes", modes);
         JSONArray hdr = new JSONArray();
-        Display.HdrCapabilities h = d.getHdrCapabilities();
-        if (h != null) {
+        Display.HdrCapabilities h = Build.VERSION.SDK_INT >= 24 ? d.getHdrCapabilities() : null;
+        if (h != null && Build.VERSION.SDK_INT >= 24) {
             for (int t : h.getSupportedHdrTypes()) {
                 switch (t) {
                     case Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION: hdr.put("dolby_vision"); break;

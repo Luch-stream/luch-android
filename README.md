@@ -1,4 +1,4 @@
-# Luch — low-latency screen receiver for Android TV
+# Luch — low-latency screen receiver for Android TV and projectors
 
 [Русская версия](README.ru.md)
 
@@ -37,6 +37,19 @@ The APK from Releases updates itself: it checks GitHub once a day and offers a n
 the first update, which Android asks you to confirm (and to allow Luch to install apps), later ones install by
 themselves while nothing is playing. Builds from F-Droid or an app store are updated by the store instead.
 Details: [docs/updates.md](docs/updates.md).
+
+## Android versions
+
+Android 5.0 and later, one APK. Android 8.0 and later get everything; older versions work with less, and the receiver
+tells the sender what (`limits` in its welcome, [PROTOCOL.md](PROTOCOL.md) section 5), so the sender can say so:
+
+| Android | What is worse |
+|---|---|
+| 11+ | nothing |
+| 8.0–10 | no low-latency decoder mode and no game mode on the display (Android 11); Wi-Fi low-latency mode needs 10 |
+| 7.x | the same |
+| 5.0–6.0 | **sound lags the picture** by the system's audio buffer (about 50–150 ms; Android 7 lets it be cut to 20 ms). The sender can leave the sound out, let it lag, or have the picture held back to match it (`sync`) |
+| 5.x | no list of the display's modes; the decoder gets no low-latency keys at all |
 
 ## Use with luch-linux
 

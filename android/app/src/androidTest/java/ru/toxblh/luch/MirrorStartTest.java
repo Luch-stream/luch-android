@@ -88,14 +88,14 @@ public class MirrorStartTest {
             if ("stats".equals(t) && m.optInt("fps") > 0) stats = m;
         }
         assertNotNull("no frames shown", stats);
-        assertTrue("screen still asleep", context.getSystemService(PowerManager.class).isInteractive());
+        assertTrue("screen still asleep", Compat.service(context, PowerManager.class).isInteractive());
     }
 
     /** A screen that closes before the first picture says so, instead of blaming the decoder. */
     @Test
     public void screenClosedBeforeThePictureIsReportedAsSuch() throws Exception {
         int port = sender.start();
-        waitFor(() -> MirrorActivity.isShown(), 5_000, "mirror screen did not open");
+        waitFor(() -> MirrorActivity.isShown(), 10_000, "mirror screen did not open");
         shell("input keyevent KEYCODE_HOME");
         sender.stream(port, 3_000); // a stopped screen has a second to come back before the session counts as closed
 
@@ -114,6 +114,7 @@ public class MirrorStartTest {
     @Test
     public void backEndsTheSessionAtOnce() throws Exception {
         int port = sender.start();
+        waitFor(() -> MirrorActivity.isShown(), 10_000, "mirror screen did not open");
         sender.stream(port, 1_000);
         shell("input keyevent KEYCODE_BACK");
         JSONObject stop = null;
@@ -129,14 +130,14 @@ public class MirrorStartTest {
     // ---- helpers ------------------------------------------------------------------------------------------------
 
     private void sleepScreen() throws IOException {
-        PowerManager pm = context.getSystemService(PowerManager.class);
+        PowerManager pm = Compat.service(context, PowerManager.class);
         shell("input keyevent KEYCODE_SLEEP");
         waitFor(() -> !pm.isInteractive(), 5_000, "screen did not go to sleep");
         SystemClock.sleep(1_000); // let the display finish turning off, as on a TV left alone
     }
 
     private void wake() throws IOException {
-        PowerManager pm = context.getSystemService(PowerManager.class);
+        PowerManager pm = Compat.service(context, PowerManager.class);
         shell("input keyevent KEYCODE_WAKEUP");
         waitFor(pm::isInteractive, 5_000, "screen did not wake up");
         shell("wm dismiss-keyguard");

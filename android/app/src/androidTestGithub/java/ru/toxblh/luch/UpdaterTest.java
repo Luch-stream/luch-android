@@ -31,7 +31,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -101,7 +100,7 @@ public class UpdaterTest {
 
     @Test
     public void aDownloadWithTheRightDigestAndSignerIsAccepted() throws Exception {
-        byte[] apk = Files.readAllBytes(new File(context.getApplicationInfo().sourceDir).toPath());
+        byte[] apk = Compat.readFile(new File(context.getApplicationInfo().sourceDir));
         server.put("/a.apk", apk);
         Updater.Release r = new Updater.Release("99.0", server.url("/a.apk"), sha256(apk));
         File f = Updater.download(context, r);
@@ -110,7 +109,7 @@ public class UpdaterTest {
 
     @Test
     public void aDownloadWithTheWrongDigestIsRefused() throws Exception {
-        byte[] apk = Files.readAllBytes(new File(context.getApplicationInfo().sourceDir).toPath());
+        byte[] apk = Compat.readFile(new File(context.getApplicationInfo().sourceDir));
         server.put("/a.apk", apk);
         Updater.Release r = new Updater.Release("99.0", server.url("/a.apk"), hex(32));
         try {

@@ -1,84 +1,52 @@
-# Supporting older Android versions
+# Android 5.0 to 7.x
 
-The receiver needs **Android 8.0** (`minSdk 26`). It can go down to **Android 5.0** (`minSdk 21`), the first Android
-TV release: hardware MediaCodec decoders, Opus and SurfaceView are all there. Nobody on the project has hardware
-older than Android 14, so this file says what to change and how to check it without such a TV.
+Luch is one APK from Android 5.0 (`minSdk 21`), the first Android TV release. Android 8.0 and later take exactly the paths they always took; older versions take a fallback where an
+API is missing, and the receiver says in its welcome what works worse (`sdk`, `limits`: PROTOCOL.md, section 5).
+Nobody on the project has such hardware: everything below is checked on emulators (see the end).
 
-The list comes from `lintGithubRelease` run with `minSdk 21` (NewApi and InlinedApi issues). Run it again after any change
-to the code: it is the source of truth, this file is not.
+## What each version lacks, and what Luch does instead
 
-```sh
-cd android
-sed -i.bak 's/minSdk 26/minSdk 21/' app/build.gradle    # the target you want
-./gradlew lintGithubRelease                              # then read app/build/reports/lint-results-githubRelease.html
-mv app/build.gradle.bak app/build.gradle
-```
+| Missing before | API | Fallback | Visible to the person |
+|---|---|---|---|
+| Android 11 (30) | `KEY_LOW_LATENCY`, `setPreferMinimalPostProcessing`, `Surface.setFrameRate` | not asked for | `decoder_low_latency`, `game_mode`: a few ms more, the TV may process the picture |
+| Android 10 (29) | `WIFI_MODE_FULL_LOW_LATENCY` | `WIFI_MODE_FULL_HIGH_PERF` | `wifi_low_latency` |
+| Android 8.1 (27) | `setTurnScreenOn`, `setShowWhenLocked` | window flags plus a `SCREEN_BRIGHT_WAKE_LOCK \| ACQUIRE_CAUSES_WAKEUP` lock for 3 s at `start` (the flags alone do not wake a sleeping screen there) | none |
+| Android 8.0 (26) | `startForegroundService`, notification channels, `AudioTrack` performance mode, `canRequestPackageInstalls`, `java.nio.file` | `startService`, `PRIORITY_MIN`, plain track, the system-wide "unknown sources" switch, `Compat.readFile` | none |
+| Android 7.0 (24) | `AudioTrack.setBufferSizeInFrames` | none: the system's minimum buffer stays | **`audio_lag`**: the sound trails the picture by `audio_latency_ms` (46 ms on the emulator, often 100–150 ms on TVs). The sender chooses: no sound, lagging sound, or `"sync":true` (the receiver holds the picture back by that much) |
+| Android 7.0 (24) | `Display.getHdrCapabilities`, `java.util.function`, `ConcurrentHashMap.newKeySet` | HDR left empty, own interface, `Collections.newSetFromMap` | `hdr_info` |
+| Android 6.0 (23) | `Context.getSystemService(Class)`, `AudioTrack.Builder`, `write(byte[]…, WRITE_NON_BLOCKING)`, `Display.getSupportedModes`, `getActiveNetwork`, `ImageFormat.PRIVATE`, `KEY_PRIORITY` / `KEY_OPERATING_RATE` | `Compat.service` by name, the old `AudioTrack` constructor, `write(ByteBuffer…)`, the current mode only, `Compat.ipv4()`, the decoder bench decodes to memory, no decoder keys at all | `display_modes` |
 
-## What each step down needs
+Android 5.0 decoders accept unknown keys in `configure()` and then fail on the first buffer, too late for
+`LowLatencyDecoder`'s retry loop, so below Android 6 the decoder gets the plain format. The emulator's software AVC
+decoder (`OMX.google.h264.decoder`) takes only the Baseline profile; the bench then reports an error for AVC and
+prefers HEVC, which is what a sender should use there. Real devices of that age usually decode High in hardware.
 
-### Android 7.0 (`minSdk 24`): nothing gets worse
+Android 5.0 also refuses activity starts from the background for 5 s after Home: the receiver asks again each second
+for 8 s, then ends the session with `screen_not_shown`.
 
-| Where | What | Change |
-|---|---|---|
-| `LuchService.start` | `startForegroundService` (26) | `startService` below 26 |
-| `LuchService` notification | `NotificationChannel`, `Notification.Builder(context, channel)` (26) | no channel and the old `Builder(context)` below 26 |
-| `MirrorSession` `AudioTrack.Builder` | `setPerformanceMode(PERFORMANCE_MODE_LOW_LATENCY)` (26) | skip it below 26; the 20 ms `setBufferSizeInFrames` still works |
+## Adding code
 
-`Luch.name` reads `Settings.Global.DEVICE_NAME` (25), an inlined constant: below 25 it reads null and the existing
-fallback to `Build.MODEL` takes over. Lint flags it; nothing to change.
+Check the API level of anything new (`./gradlew lintGithubRelease` reports NewApi as an error). Wrap it in
+`Build.VERSION.SDK_INT >= N`, or add a method to `Compat` when the same call is needed in several places. If the
+fallback is worse in a way a person would notice, add a limit to `Caps.limits()`, PROTOCOL.md section 5 and the
+table in the README.
 
-### Android 6.0 (`minSdk 23`): audio latency goes up
+## Checking on emulators
 
-Everything above, plus:
-
-| Where | What | Change |
-|---|---|---|
-| `MirrorSession` audio | `setBufferSizeInFrames`, `getBufferCapacityInFrames` (24) | skip below 24. **Cost:** the track keeps its minimum buffer, 100–150 ms on the TVs we know, instead of about 20 ms. Video is not affected |
-| `Bench.autoRun` | `java.util.function.Consumer` (24) | a small interface of our own (or core library desugaring, which adds a dependency) |
-| `ControlServer` | `ConcurrentHashMap.newKeySet` (24) | `Collections.newSetFromMap(new ConcurrentHashMap<>())` |
-| `Caps.display` | `Display.getHdrCapabilities` (24) | leave `hdr` empty below 24 |
-
-### Android 5.0 (`minSdk 21`)
-
-Everything above, plus:
-
-| Where | What | Change |
-|---|---|---|
-| everywhere | `Context.getSystemService(Class)` (23) | `getSystemService(Context.POWER_SERVICE)` and so on, with a cast |
-| `MirrorSession` audio | `AudioTrack.Builder` (23), `write(ByteBuffer…)` / `write(…, WRITE_NON_BLOCKING)` (23) | the old `AudioTrack(streamType, rate, channels, format, size, MODE_STREAM)` constructor and blocking writes |
-| `Caps.display` | `Display.getSupportedModes` and `Display.Mode` (23) | leave `modes` empty below 23 (senders then fall back to 1920x1080) |
-| `StatusActivity.address` | `ConnectivityManager.getActiveNetwork` (23) | `WifiManager.getConnectionInfo().getIpAddress()` below 23 |
-| `LowLatencyDecoder`, `Bench` | `KEY_PRIORITY`, `KEY_OPERATING_RATE`, `ImageFormat.PRIVATE` (23) | these are inlined constants: harmless, the decoder ignores unknown keys, but keep `ImageFormat.PRIVATE` behind a check |
-
-Low-latency decoding itself (`KEY_LOW_LATENCY`, `setPreferMinimalPostProcessing`, `Surface.setFrameRate`) is
-Android 11 and is already behind version checks: on older systems the picture works, only without those requests.
-
-## How to check without the hardware
-
-There are no Android TV emulator images for Apple Silicon below API 31, but phone images exist for every level:
-`system-images;android-21…29;default;arm64-v8a` (and `x86_64` on Intel). The receiver does not depend on the TV UI,
-so a phone image is enough for everything except the leanback launcher entry.
+Android TV images for Apple Silicon start at API 31, so the old versions are phone images
+(`system-images;android-21|23|24;default;arm64-v8a`); the receiver does not depend on the TV UI.
 
 ```sh
 SDK=~/Library/Android/sdk
-$SDK/cmdline-tools/latest/bin/sdkmanager "system-images;android-24;default;arm64-v8a"
-echo no | $SDK/cmdline-tools/latest/bin/avdmanager create avd -n luch-24 -k "system-images;android-24;default;arm64-v8a"
-$SDK/emulator/emulator -avd luch-24 -no-window -no-audio -gpu swiftshader_indirect &
+$SDK/cmdline-tools/latest/bin/sdkmanager "system-images;android-21;default;arm64-v8a"
+echo no | $SDK/cmdline-tools/latest/bin/avdmanager create avd -n luch-21 -k "system-images;android-21;default;arm64-v8a" -d tv_1080p
+$SDK/emulator/emulator -avd luch-21 -no-window -no-audio -no-snapshot -gpu guest &
 cd android && ANDROID_SERIAL=emulator-5554 ./gradlew connectedGithubDebugAndroidTest
 ```
 
-What to check on each level you claim:
+Run the whole suite on 21, 23, 24 and the API 34 TV image (`android-tv;arm64-v8a`) before a release.
+`AudioModesTest` checks the welcome's `limits` and the `sync` hold for the version it runs on; `MirrorStartTest`
+plays a sender with the codec the receiver's bench prefers.
 
-1. `./gradlew lintGithubRelease` has no NewApi errors.
-2. `connectedGithubDebugAndroidTest` passes (`MirrorStartTest`: a start with the screen asleep, a screen closed before the
-   first picture, Back).
-3. By hand, with `tools/testsend.py <emulator address>` or a real sender: the status screen opens, the service
-   announces itself (`adb shell dumpsys activity services ru.toxblh.luch`), a stream shows a picture, and **audio
-   plays** (the tests do not cover audio yet).
-4. Note the `audio track: capacity … frames, using …` log line (tag `Luch`): on Android 6 and below the buffer stays
-   at the system minimum.
-
-Emulator decoders are software ones (`c2.android.*`, `OMX.google.*`) or goldfish passthroughs: they show that the code
-works on that Android version, not how fast a real TV's decoder is.
-
-Then update `minSdk` in `android/app/build.gradle`, the requirement in both READMEs and the F-Droid metadata.
+Emulator decoders are software ones: these runs show that the code works on that Android version, not how fast a
+real device decodes.

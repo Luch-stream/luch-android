@@ -75,10 +75,15 @@ final class Bench {
      * After install, a firmware update or the first connection: measure once, on its own, when nothing would notice.
      * A video playing (any audio playing) or a mirroring session means "later": in 10 minutes or at the next hello.
      */
-    static synchronized void autoRun(Context context, java.util.function.Consumer<JSONObject> done) {
+    /** Gets the result of a measurement (java.util.function.Consumer is Android 7). */
+    interface Done {
+        void accept(JSONObject result);
+    }
+
+    static synchronized void autoRun(Context context, Done done) {
         Context app = context.getApplicationContext();
         if (cached(app) != null || running) return;
-        android.media.AudioManager audio = app.getSystemService(android.media.AudioManager.class);
+        android.media.AudioManager audio = Compat.service(app, android.media.AudioManager.class);
         boolean busy = MirrorSession.current != null || (audio != null && audio.isMusicActive());
         if (retry[0] != null) MAIN.removeCallbacks(retry[0]);
         if (busy) {
@@ -139,15 +144,21 @@ final class Bench {
         List<byte[]> frames = asset.endsWith(".ivf") ? ivfFrames(read(context, asset)) : annexBFrames(read(context, asset), mime);
         HandlerThread ht = new HandlerThread("luch-bench-out");
         ht.start();
-        // An invisible surface: the decoder works as for the screen, nothing shows.
-        ImageReader reader = ImageReader.newInstance(W, H, ImageFormat.PRIVATE, 4);
-        reader.setOnImageAvailableListener(r -> {
-            Image img = r.acquireLatestImage();
-            if (img != null) img.close();
-        }, new Handler(ht.getLooper()));
-        MediaCodec codec = LowLatencyDecoder.create(mime, W, H, FPS, reader.getSurface(), false);
+        // An invisible surface: the decoder works as for the screen, nothing shows. It needs ImageFormat.PRIVATE
+        // (whatever layout the decoder likes), Android 6. Android 5 decodes to memory instead: a little slower than
+        // to the screen, so its figures are on the safe side.
+        ImageReader reader = null;
+        if (Build.VERSION.SDK_INT >= 23) {
+            reader = ImageReader.newInstance(W, H, ImageFormat.PRIVATE, 4);
+            reader.setOnImageAvailableListener(r -> {
+                Image img = r.acquireLatestImage();
+                if (img != null) img.close();
+            }, new Handler(ht.getLooper()));
+        }
+        boolean toSurface = reader != null;
+        MediaCodec codec = LowLatencyDecoder.create(mime, W, H, FPS, toSurface ? reader.getSurface() : null, false);
         if (codec == null) {
-            reader.close();
+            if (reader != null) reader.close();
             ht.quitSafely();
             return new JSONObject().put("error", "no decoder");
         }
@@ -168,7 +179,7 @@ final class Bench {
                 long now = System.nanoTime() / 1000;
                 if (outCount[0] < latencyUs.length) latencyUs[outCount[0]] = now - info.presentationTimeUs;
                 outCount[0]++;
-                codec.releaseOutputBuffer(i, true);
+                codec.releaseOutputBuffer(i, toSurface);
             }
         }, "luch-bench-drain");
         out.start();
@@ -194,7 +205,7 @@ final class Bench {
         } catch (RuntimeException ignored) {
         }
         codec.release();
-        reader.close();
+        if (reader != null) reader.close();
         ht.quitSafely();
 
         int got = Math.min(outCount[0], latencyUs.length);

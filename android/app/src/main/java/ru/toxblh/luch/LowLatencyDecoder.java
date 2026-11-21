@@ -58,6 +58,9 @@ final class LowLatencyDecoder {
             if (supportedVendor == null || supportedVendor.contains(k)) keys.add(k);
         }
         Log.i(LuchService.TAG, "decoder " + name + " vendor params: " + supportedVendor);
+        // Android 5 knows none of these keys (priority and operating rate are Android 6), and its decoders accept them in
+        // configure() only to fail on the first buffer, too late for the loop below to notice: plain format there.
+        if (Build.VERSION.SDK_INT < 23) keys.clear();
 
         for (int keep = keys.size(); keep >= 0; keep--) {
             MediaFormat f = MediaFormat.createVideoFormat(mime, width, height);

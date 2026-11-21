@@ -34,9 +34,10 @@ final class ControlServer {
 
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final Set<Socket> open = ConcurrentHashMap.newKeySet();
+    private final Set<Socket> open = java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
     /** Control channels of the connected senders, for results nobody asked for on that channel (auto bench). */
-    static final Set<MirrorSession.Control> SENDERS = ConcurrentHashMap.newKeySet();
+    static final Set<MirrorSession.Control> SENDERS =
+            java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
     private static final java.util.concurrent.ExecutorService WRITER =
             java.util.concurrent.Executors.newSingleThreadExecutor();
     private ServerSocket socket;
@@ -246,6 +247,9 @@ final class ControlServer {
                 .put("decoders", new JSONArray(Luch.decoders()))
                 .put("max", Luch.maxSize())
                 .put("modes", new JSONArray().put("mirror"))
+                // Android version, and what works worse on it than on 8.0+ (PROTOCOL.md, section 5).
+                .put("sdk", android.os.Build.VERSION.SDK_INT)
+                .put("limits", Caps.limits())
                 // What the hardware says it can do, and what it measured (null until the bench has run).
                 .put("hw", Caps.collect(context))
                 .put("bench", Bench.cached(context) == null ? JSONObject.NULL : Bench.cached(context));

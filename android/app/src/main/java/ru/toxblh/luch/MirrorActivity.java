@@ -71,7 +71,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onResume() {
         super.onResume();
-        WifiManager wifi = getApplicationContext().getSystemService(WifiManager.class);
+        WifiManager wifi = Compat.service(getApplicationContext(), WifiManager.class);
         if (wifi != null && wifiLock == null) {
             int mode = Build.VERSION.SDK_INT >= 29 ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY
                     : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
@@ -137,13 +137,27 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         return getSharedPreferences("luch", MODE_PRIVATE);
     }
 
+    /** Without a remote (a touch screen), a tap does what OK does. */
+    @Override
+    public boolean onTouchEvent(android.view.MotionEvent e) {
+        if (e.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+            toggleStats();
+            return true;
+        }
+        return super.onTouchEvent(e);
+    }
+
+    private void toggleStats() {
+        statsOn = !statsOn;
+        stats.setVisibility(statsOn ? View.VISIBLE : View.GONE);
+        prefs().edit().putBoolean("stats", statsOn).apply();
+    }
+
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
                 || keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_MENU) {
-            statsOn = !statsOn;
-            stats.setVisibility(statsOn ? View.VISIBLE : View.GONE);
-            prefs().edit().putBoolean("stats", statsOn).apply();
+            toggleStats();
             return true;
         }
         return super.onKeyUp(keyCode, event);

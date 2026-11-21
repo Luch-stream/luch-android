@@ -10,6 +10,7 @@ import android.net.LinkProperties;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.widget.Button;
@@ -100,7 +101,9 @@ public class StatusActivity extends Activity {
     private void installUpdate() {
         Updater.Release r = Updater.available;
         if (r == null) return;
-        if (!getPackageManager().canRequestPackageInstalls()) {
+        // Android 8+ asks per app whether it may install apps; before it, the system-wide "unknown sources" switch
+        // applies and the installer itself says so.
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
             // Android asks once whether Luch may install apps; some TVs have no page for it.
             try {
                 startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -117,6 +120,7 @@ public class StatusActivity extends Activity {
     private static final Luch.Peer DEMO_SENDER = new Luch.Peer("demo", "Linux Laptop", "192.168.1.20");
 
     private String address() {
+        if (Build.VERSION.SDK_INT < 23) return Compat.ipv4();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         LinkProperties lp = cm.getLinkProperties(cm.getActiveNetwork());
         if (lp != null) {

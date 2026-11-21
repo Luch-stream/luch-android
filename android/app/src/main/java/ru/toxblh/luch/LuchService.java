@@ -39,14 +39,14 @@ public class LuchService extends Service {
     private boolean resolving;
 
     static void start(Context context) {
-        context.startForegroundService(new Intent(context, LuchService.class));
+        Compat.startForegroundService(context, new Intent(context, LuchService.class));
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
         goForeground();
-        nsd = getSystemService(NsdManager.class);
+        nsd = Compat.service(this, NsdManager.class);
         server = new ControlServer(this);
         int port = server.start();
         if (port <= 0) {
@@ -85,10 +85,17 @@ public class LuchService extends Service {
     }
 
     private void goForeground() {
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.createNotificationChannel(new NotificationChannel(CHANNEL, getString(R.string.app_name),
-                NotificationManager.IMPORTANCE_MIN));
-        Notification n = new Notification.Builder(this, CHANNEL)
+        Notification.Builder builder;
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            nm.createNotificationChannel(new NotificationChannel(CHANNEL, getString(R.string.app_name),
+                    NotificationManager.IMPORTANCE_MIN));
+            builder = new Notification.Builder(this, CHANNEL);
+        } else {
+            // No channels before Android 8: the priority says the same.
+            builder = new Notification.Builder(this).setPriority(Notification.PRIORITY_MIN);
+        }
+        Notification n = builder
                 .setSmallIcon(R.drawable.ic_luch)
                 .setContentTitle(getString(R.string.app_name))
                 .setContentText(getString(R.string.notification_text))

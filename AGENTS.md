@@ -1,6 +1,6 @@
 # Notes for contributors and coding agents
 
-Luch is a low-latency screen receiver for Android TV. The sender is a separate project,
+Luch is a low-latency screen receiver for Android TV and projectors (Android 5.0+, one APK). The sender is a separate project,
 [luch-linux](https://github.com/Toxblh/luch-linux). The wire protocol is in [PROTOCOL.md](PROTOCOL.md): change both
 sides together.
 
@@ -40,5 +40,7 @@ sides together.
 
 ## Older Android
 
-The minimum is Android 8.0. What it takes to go down to 5.0, and how to check it without such a TV:
-[docs/older-android.md](docs/older-android.md).
+One APK from Android 5.0: calls newer than that go through `Compat` or a `Build.VERSION.SDK_INT` check, and
+Android 8.0+ takes the same paths as before. What is worse on older versions is announced in the welcome
+(`Caps.limits`). Before adding a call, check its API level (`./gradlew lintGithubRelease`); test on the 5.0, 6.0, 7.0
+and 14 emulators: [docs/older-android.md](docs/older-android.md).

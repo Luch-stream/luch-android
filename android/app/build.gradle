@@ -17,7 +17,7 @@ android {
 
     defaultConfig {
         applicationId 'ru.toxblh.luch'
-        minSdk 26
+        minSdk 21
         targetSdk 34
         // -PluchVersionCode / -PluchVersionName: only for trying an update on an emulator (docs/updates.md).
         versionCode Integer.parseInt(String.valueOf(project.findProperty('luchVersionCode') ?: '2'))

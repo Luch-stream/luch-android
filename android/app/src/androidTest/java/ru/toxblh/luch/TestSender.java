@@ -101,25 +101,55 @@ final class TestSender {
         return all;
     }
 
+    /** The codec a real sender would pick: the receiver's bench "prefer", AVC if it has none. */
+    String codec = "video/avc";
+
     /** Sends start, returns the video port from ready. */
     int start() throws Exception {
-        send(new JSONObject().put("t", "start").put("mode", "mirror")
-                .put("video", new JSONObject().put("codec", "video/avc").put("width", 1920).put("height", 1080)
-                        .put("fps", 30)));
-        JSONObject ready = next(5_000);
-        assertEquals("ready: " + ready, "ready", ready.getString("t"));
-        return ready.getInt("video_port");
+        return start(null).getInt("video_port");
     }
 
-    /** The bench clip (one access unit per AUD), looped at 30 fps for {@code ms}. */
+    /** Sends start with {@code audio} (null: none), returns the ready message. */
+    JSONObject start(JSONObject audio) throws Exception {
+        JSONObject bench = Bench.cached(InstrumentationRegistry.getInstrumentation().getTargetContext());
+        if (bench != null && !bench.optString("prefer").isEmpty()) codec = bench.optString("prefer");
+        if (!codec.equals("video/hevc")) codec = "video/avc";   // the two clips the test can send
+        JSONObject start = new JSONObject().put("t", "start").put("mode", "mirror")
+                .put("video", new JSONObject().put("codec", codec).put("width", 1920).put("height", 1080)
+                        .put("fps", 30));
+        if (audio != null) start.put("audio", audio);
+        send(start);
+        JSONObject ready = next(5_000);
+        assertEquals("ready: " + ready, "ready", ready.getString("t"));
+        return ready;
+    }
+
+    /** The audio stream's config packet: an OpusHead (stereo, 48 kHz), which is all the receiver needs to set up. */
+    void sendOpusHead(int port) throws IOException {
+        ByteBuffer head = ByteBuffer.allocate(19).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        head.put("OpusHead".getBytes(StandardCharsets.US_ASCII)).put((byte) 1).put((byte) 2).putShort((short) 312)
+                .putInt(48000).putShort((short) 0).put((byte) 0);
+        byte[] h = head.array();
+        ByteBuffer b = ByteBuffer.allocate(MirrorSession.HEADER + h.length);
+        b.put((byte) 2).put((byte) 2).putShort((short) 0).putShort((short) 1).putShort((short) 0)
+                .putInt(0).putInt(0).putInt(h.length).putShort((short) 0).putShort((short) 0).put(h);
+        try (DatagramSocket udp = new DatagramSocket()) {
+            udp.send(new DatagramPacket(b.array(), b.position(), InetAddress.getLoopbackAddress(), port));
+        }
+    }
+
+    /** The bench clip of {@link #codec} (one access unit per AUD), looped at 30 fps for {@code ms}. */
     void stream(int port, long ms) throws Exception {
-        List<byte[]> frames = accessUnits(readAsset("bench/avc.h264"));
+        boolean hevc = codec.equals("video/hevc");
+        List<byte[]> frames = accessUnits(readAsset(hevc ? "bench/hevc.h265" : "bench/avc.h264"), hevc);
         try (DatagramSocket udp = new DatagramSocket()) {
             InetAddress to = InetAddress.getLoopbackAddress();
             long until = SystemClock.uptimeMillis() + ms;
             for (int i = 0; SystemClock.uptimeMillis() < until; i++) {
                 byte[] f = frames.get(i % frames.size());
-                int flags = (hasNal(f, 5) ? 1 : 0) | (hasNal(f, 7) ? 2 : 0);
+                boolean idr = hevc ? hasNal(f, 19, true) || hasNal(f, 20, true) : hasNal(f, 5, false);
+                boolean config = hasNal(f, hevc ? 32 : 7, hevc);   // VPS / SPS
+                int flags = (idr ? 1 : 0) | (config ? 2 : 0);
                 sendFrame(udp, to, port, f, flags);
                 SystemClock.sleep(33);
             }
@@ -149,11 +179,11 @@ final class TestSender {
         }
     }
 
-    /** Splits Annex-B H.264 at access unit delimiters (the clip is made with aud=1). */
-    private static List<byte[]> accessUnits(byte[] es) {
+    /** Splits Annex-B H.264 or HEVC at access unit delimiters (the clips are made with aud=1). */
+    private static List<byte[]> accessUnits(byte[] es, boolean hevc) {
         List<Integer> starts = new ArrayList<>();
         for (int i = 0; i + 4 < es.length; i++) {
-            if (es[i] == 0 && es[i + 1] == 0 && es[i + 2] == 0 && es[i + 3] == 1 && (es[i + 4] & 0x1f) == 9) {
+            if (es[i] == 0 && es[i + 1] == 0 && es[i + 2] == 0 && es[i + 3] == 1 && nalType(es[i + 4], hevc) == (hevc ? 35 : 9)) {
                 starts.add(i);
             }
         }
@@ -167,11 +197,15 @@ final class TestSender {
         return out;
     }
 
-    private static boolean hasNal(byte[] f, int type) {
+    private static boolean hasNal(byte[] f, int type, boolean hevc) {
         for (int i = 0; i + 3 < f.length; i++) {
-            if (f[i] == 0 && f[i + 1] == 0 && f[i + 2] == 1 && (f[i + 3] & 0x1f) == type) return true;
+            if (f[i] == 0 && f[i + 1] == 0 && f[i + 2] == 1 && nalType(f[i + 3], hevc) == type) return true;
         }
         return false;
+    }
+
+    private static int nalType(byte b, boolean hevc) {
+        return hevc ? (b >> 1) & 0x3f : b & 0x1f;
     }
 
     void close() {
