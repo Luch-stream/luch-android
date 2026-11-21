@@ -50,7 +50,7 @@ public class LuchService extends Service {
         server = new ControlServer(this);
         int port = server.start();
         if (port <= 0) {
-            Luch.setStatus("control port busy");
+            Luch.setStatus(getString(R.string.status_port_busy));
             return;
         }
         announce(port);
@@ -120,7 +120,7 @@ public class LuchService extends Service {
             @Override
             public void onServiceRegistered(NsdServiceInfo s) {
                 Log.i(TAG, "announced as " + s.getServiceName() + " port " + port);
-                Luch.setStatus("announced as \"" + s.getServiceName() + "\", port " + port);
+                Luch.setStatus(getString(R.string.status_announced, s.getServiceName()));
             }
 
             @Override
@@ -132,7 +132,7 @@ public class LuchService extends Service {
                     main.postDelayed(() -> announce(port), 1000);
                     return;
                 }
-                Luch.setStatus("announce failed: " + error);
+                Luch.setStatus(getString(R.string.status_announce_failed, error));
             }
 
             @Override

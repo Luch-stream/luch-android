@@ -45,17 +45,41 @@ if ready["t"] != "ready":
 vport = ready["video_port"]
 
 
+pings = {}
+rtt_ms = [0.0]
+sent = {"frames": 0, "bytes": 0}
+
+
 def reader():
     try:
         for line in rf:
             m = json.loads(line)
-            if m["t"] in ("stats", "keyframe", "stop", "error"):
+            if m["t"] == "pong" and m.get("n") in pings:
+                rtt_ms[0] = (time.monotonic() - pings.pop(m["n"])) * 1000
+            elif m["t"] == "ping":
+                send({"t": "pong", "n": m.get("n")})
+            elif m["t"] in ("stats", "keyframe", "stop", "error"):
                 print("<-", line.strip())
     except Exception:
         pass
 
 
+def sender_stats():
+    """Once a second, like luchd: RTT from ping/pong, and what was sent, for the receiver's overlay."""
+    n = 0
+    while True:
+        time.sleep(1)
+        n += 1
+        pings[n] = time.monotonic()
+        send({"t": "ping", "n": n})
+        f, b = sent["frames"], sent["bytes"]
+        sent["frames"] = sent["bytes"] = 0
+        send({"t": "sender_stats", "rtt_ms": round(rtt_ms[0], 1), "host_ms": 0, "fps": f,
+              "mbps": round(b * 8 / 1e6, 1), "encoder": "x264", "res": f"{W}x{H}"})
+
+
 threading.Thread(target=reader, daemon=True).start()
+threading.Thread(target=sender_stats, daemon=True).start()
 
 ff = subprocess.Popen(
     ["ffmpeg", "-loglevel", "error", "-re", "-f", "lavfi", "-i", f"testsrc2=size={W}x{H}:rate={FPS}",
@@ -81,6 +105,8 @@ def send_frame(au):
         hdr = struct.pack(">BBHHHIIIHH", 1, 1 if idr else 0, i, n, 0, seq, pts, len(au), 0, 0)
         udp.sendto(hdr + chunk, (HOST, vport))
     seq += 1
+    sent["frames"] += 1
+    sent["bytes"] += len(au)
 
 
 while True:

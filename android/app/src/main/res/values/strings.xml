@@ -7,4 +7,7 @@
     <string name="status_address">Address: %1$s, port %2$d</string>
     <string name="status_connected">Connected senders</string>
     <string name="status_nearby">Senders nearby</string>
+    <string name="status_announced">On the network as “%s”</string>
+    <string name="status_announce_failed">Could not announce on the network (error %d)</string>
+    <string name="status_port_busy">The control port is busy</string>
 </resources>

@@ -59,18 +59,27 @@ public class StatusActivity extends Activity {
     }
 
     private void render() {
+        // Demo values for store screenshots, so no real name or address is ever in one:
+        //   adb shell am start -n ru.toxblh.luch/.StatusActivity --ez demo true
+        boolean demo = getIntent().getBooleanExtra("demo", false);
+        String name = demo ? DEMO_TV : Luch.name(this);
+        java.util.List<Luch.Peer> connected = demo ? java.util.Collections.singletonList(DEMO_SENDER) : Luch.connected();
+        java.util.List<Luch.Peer> nearby = demo ? java.util.Collections.singletonList(DEMO_SENDER) : Luch.nearby();
         StringBuilder sb = new StringBuilder();
-        sb.append(getString(R.string.status_name, Luch.name(this))).append('\n');
-        sb.append(getString(R.string.status_address, address(), Luch.PORT)).append('\n');
-        sb.append(Luch.status).append("\n\n");
+        sb.append(getString(R.string.status_name, name)).append('\n');
+        sb.append(getString(R.string.status_address, demo ? "192.168.1.50" : address(), Luch.PORT)).append('\n');
+        sb.append(demo ? getString(R.string.status_announced, DEMO_TV + " · Luch") : Luch.status).append("\n\n");
         sb.append(getString(R.string.status_connected)).append('\n');
-        if (Luch.connected().isEmpty()) sb.append("  —\n");
-        for (Luch.Peer p : Luch.connected()) sb.append("  • ").append(p.name).append("  ").append(p.address).append('\n');
+        if (connected.isEmpty()) sb.append("  —\n");
+        for (Luch.Peer p : connected) sb.append("  • ").append(p.name).append("  ").append(p.address).append('\n');
         sb.append('\n').append(getString(R.string.status_nearby)).append('\n');
-        if (Luch.nearby().isEmpty()) sb.append("  —\n");
-        for (Luch.Peer p : Luch.nearby()) sb.append("  • ").append(p.name).append("  ").append(p.address).append('\n');
+        if (nearby.isEmpty()) sb.append("  —\n");
+        for (Luch.Peer p : nearby) sb.append("  • ").append(p.name).append("  ").append(p.address).append('\n');
         body.setText(sb);
     }
+
+    private static final String DEMO_TV = "Living room TV";
+    private static final Luch.Peer DEMO_SENDER = new Luch.Peer("demo", "Linux Laptop", "192.168.1.20");
 
     private String address() {
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
