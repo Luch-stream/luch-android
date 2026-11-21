@@ -31,6 +31,14 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // A sender may start while the TV's screen is asleep (issue #1): come up over it and turn it on.
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        } else {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                    | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+        }
         // Ask the display for its game mode: the least picture processing, the least delay (Moonlight does the same).
         if (Build.VERSION.SDK_INT >= 30) getWindow().setPreferMinimalPostProcessing(true);
         SurfaceView view = new SurfaceView(this);
@@ -79,17 +87,41 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         super.onPause();
     }
 
-    /** Leaving the screen in any way ends the session, so the sender stops capturing. */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        stopped = false;
+        handler.removeCallbacks(closeIfStillStopped);
+    }
+
+    /**
+     * Leaving the screen ends the session, so the sender stops capturing. Not at once: a screen started while the TV
+     * was asleep is stopped and started again as the TV wakes up and its lock screen passes (issue #1).
+     */
     @Override
     protected void onStop() {
         android.util.Log.i(LuchService.TAG, "mirror screen stopped, finishing=" + isFinishing());
-        MirrorSession s = MirrorSession.current;
-        if (s != null && !s.ended()) s.stopByUser();
+        stopped = true;
+        handler.removeCallbacks(closeIfStillStopped);
+        if (isFinishing()) closeIfStillStopped.run();
+        else handler.postDelayed(closeIfStillStopped, STOP_GRACE_MS);
         super.onStop();
     }
 
+    /** How long a stopped screen may take to come back before the session counts as closed. */
+    private static final long STOP_GRACE_MS = 1_000;
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean stopped;
+    private final Runnable closeIfStillStopped = () -> {
+        if (!stopped) return;
+        MirrorSession s = MirrorSession.current;
+        if (s != null && !s.ended()) s.stopByReceiver(MirrorSession.SCREEN_CLOSED);
+        if (!isFinishing()) finish();
+    };
+
     @Override
     protected void onDestroy() {
+        handler.removeCallbacks(closeIfStillStopped);
         if (shown == this) shown = null;
         super.onDestroy();
     }
@@ -97,7 +129,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     public void onBackPressed() {
         MirrorSession s = MirrorSession.current;
-        if (s != null) s.stopByUser();
+        if (s != null) s.stopByReceiver(MirrorSession.BY_BACK);
         finish();
     }
 
@@ -115,6 +147,11 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             return true;
         }
         return super.onKeyUp(keyCode, event);
+    }
+
+    /** Whether the mirror screen exists (created and not yet destroyed). */
+    static boolean isShown() {
+        return shown != null;
     }
 
     /** New figures, once a second, from the session's stats thread. */

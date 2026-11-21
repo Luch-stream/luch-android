@@ -21,6 +21,7 @@ android {
         targetSdk 34
         versionCode 2
         versionName '0.2'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
     signingConfigs {
@@ -57,4 +58,10 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+// Only for the on-device tests (./gradlew connectedAndroidTest on an emulator); nothing of it goes into the APK.
+dependencies {
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
 }

@@ -64,6 +64,10 @@ final class MirrorSession {
     private volatile boolean ended;
     private volatile Surface surface;
     private final Object surfaceLock = new Object();
+    /** The screen came back with a new surface: the decoder is made again for it, from the next IDR. */
+    private volatile boolean surfaceSwapped;
+    private int decoderResets;
+    private static final int MAX_DECODER_RESETS = 5;
 
     // ---- video state (receive thread only, except where noted) ----
     private MediaCodec decoder;
@@ -107,7 +111,7 @@ final class MirrorSession {
     /** Opens both sockets and the screen; returns {video port, audio port}. */
     static synchronized int[] start(Context context, Control control, JSONObject msg) throws IOException {
         MirrorSession old = current;
-        if (old != null) old.end(false);
+        if (old != null) old.end(null);
         MirrorSession s = new MirrorSession(context, control, msg);
         s.videoSocket = openSocket();
         s.audioSocket = openSocket();
@@ -142,11 +146,15 @@ final class MirrorSession {
 
     static synchronized void stopFromSender(Control control) {
         MirrorSession s = current;
-        if (s != null && s.control == control) s.end(false);
+        if (s != null && s.control == control) s.end(null);
     }
 
-    void stopByUser() {
-        end(true);
+    /** Ways the receiver ends a session itself, sent as the {@code reason} of its stop. */
+    static final String BY_BACK = "back", SCREEN_CLOSED = "screen_closed";
+
+    /** The person (Back) or the system (Home, another app, the screen going off) closed the picture. */
+    void stopByReceiver(String reason) {
+        end(reason);
     }
 
     boolean ended() {
@@ -158,10 +166,32 @@ final class MirrorSession {
     }
 
     void setSurface(Surface s) {
+        Surface old;
         synchronized (surfaceLock) {
+            old = surface;
             surface = s;
             surfaceLock.notifyAll();
         }
+        if (s == null) return;
+        // The screen was stopped for a moment (waking up, the lock screen passing by) and came back with a new
+        // surface. The receive thread makes the decoder again for it (setOutputSurface is not reliable on every TV).
+        if (decoder != null && s != old) surfaceSwapped = true;
+    }
+
+    /** Drops the decoder; the next IDR makes a new one on the current surface (receive thread). */
+    private void resetDecoder(String why) throws IOException {
+        if (++decoderResets > MAX_DECODER_RESETS) throw new IOException("decoder keeps failing: " + why);
+        Log.i(LuchService.TAG, "decoder reset: " + why);
+        MediaCodec d = decoder;
+        decoder = null;
+        if (d != null) {
+            try {
+                d.stop();
+            } catch (RuntimeException ignored) {
+            }
+            d.release();
+        }
+        lost(why);
     }
 
     // ---- video: receive and reassemble ---------------------------------------------------------------------
@@ -205,12 +235,16 @@ final class MirrorSession {
         } catch (IOException e) {
             if (!ended) Log.i(LuchService.TAG, "video ended: " + e);
         } finally {
-            end(false);
+            end(null);
         }
     }
 
     private void onShard(long seq, int idx, int shards, int flags, int frameLen, int hostLatency, byte[] buf, int n)
             throws IOException {
+        if (surfaceSwapped) {
+            surfaceSwapped = false;
+            resetDecoder("new surface");
+        }
         if (seq <= lastDelivered || (curSeq >= 0 && seq < curSeq)) return;   // late or duplicate
         if (seq != curSeq) {
             // A packet of a later frame: the one in flight, if any, will never complete.
@@ -289,8 +323,9 @@ final class MirrorSession {
         try {
             // Short normally; longer for an IDR and the first frames, while the decoder sets up its output buffers.
             index = decoder.dequeueInputBuffer(idr || framesIn < 30 ? 200_000 : 20_000);
-        } catch (IllegalStateException e) {
-            throw new IOException("decoder failed", e);
+        } catch (IllegalStateException e) {   // also MediaCodec.CodecException: e.g. its surface went away under it
+            resetDecoder("decoder failed: " + e);
+            return;
         }
         if (index < 0) {
             // Decoder full: this frame is gone, and the pictures after it would be smeared.
@@ -298,16 +333,20 @@ final class MirrorSession {
             lost("decoder busy at frame " + seq);
             return;
         }
-        ByteBuffer in = decoder.getInputBuffer(index);
-        in.clear();
-        in.put(frame);
         long ptsUs = System.nanoTime() / 1000;
-        synchronized (ptsRing) {
-            ptsRing[ringPos] = ptsUs;
-            seqRing[ringPos] = seq;
-            ringPos = (ringPos + 1) % ptsRing.length;
+        try {
+            ByteBuffer in = decoder.getInputBuffer(index);
+            in.clear();
+            in.put(frame);
+            synchronized (ptsRing) {
+                ptsRing[ringPos] = ptsUs;
+                seqRing[ringPos] = seq;
+                ringPos = (ringPos + 1) % ptsRing.length;
+            }
+            decoder.queueInputBuffer(index, 0, frame.length, ptsUs, idr ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
+        } catch (IllegalStateException e) {
+            resetDecoder("decoder failed: " + e);
         }
-        decoder.queueInputBuffer(index, 0, frame.length, ptsUs, idr ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
     }
 
     /** Waits a little for the screen's surface, then configures the decoder with Moonlight's low-latency keys. */
@@ -328,6 +367,12 @@ final class MirrorSession {
             return false;
         }
         decoder = LowLatencyDecoder.create(videoMime, width, height, fps, s, operatingRate);
+        if (decoder == null && (ended || !s.isValid())) {
+            // The screen went away while the decoder was being set up: not the decoder's fault (issue #1). Wait for
+            // it to come back; if it does not, MirrorActivity ends the session as closed.
+            framesDropped++;
+            return false;
+        }
         if (decoder == null) {
             send("error", "start_failed", "no decoder for " + videoMime);
             throw new IOException("no decoder for " + videoMime);
@@ -354,6 +399,11 @@ final class MirrorSession {
                     index = next;
                     pts = info.presentationTimeUs;
                 }
+                if (surface == null) {
+                    codec.releaseOutputBuffer(index, false);   // the screen is away for a moment: nowhere to draw
+                    framesDropped++;
+                    continue;
+                }
                 codec.releaseOutputBuffer(index, System.nanoTime());
                 framesRendered++;
                 long now = System.nanoTime() / 1000;
@@ -369,7 +419,7 @@ final class MirrorSession {
                 }
             }
         } catch (IllegalStateException e) {
-            if (!ended) Log.w(LuchService.TAG, "render", e);
+            if (!ended && codec == decoder) Log.w(LuchService.TAG, "render", e);   // a reset decoder ends quietly
         }
     }
 
@@ -553,14 +603,15 @@ final class MirrorSession {
         }
     }
 
-    private void end(boolean byUser) {
+    /** Ends the session; {@code byReceiver} is the reason when the receiver ends it, null otherwise. */
+    private void end(String byReceiver) {
         synchronized (this) {
             if (ended) return;
             ended = true;
         }
-        if (byUser) {
+        if (byReceiver != null) {
             try {
-                control.send(new JSONObject().put("t", "stop").put("by", "receiver"));
+                control.send(new JSONObject().put("t", "stop").put("by", "receiver").put("reason", byReceiver));
             } catch (JSONException ignored) {
             }
         }
@@ -577,7 +628,7 @@ final class MirrorSession {
         synchronized (MirrorSession.class) {
             if (current == this) current = null;
         }
-        Log.i(LuchService.TAG, "mirror ended" + (byUser ? " by user" : "") + ": in=" + framesIn + " rendered="
+        Log.i(LuchService.TAG, "mirror ended" + (byReceiver != null ? " here (" + byReceiver + ")" : "") + ": in=" + framesIn + " rendered="
                 + framesRendered + " dropped=" + framesDropped + " lost=" + framesLost + " decoder=" + decoderName);
         MirrorActivity.sessionEnded();
     }

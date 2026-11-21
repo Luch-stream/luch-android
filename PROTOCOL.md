@@ -54,10 +54,15 @@ sender   → {"t":"start","mode":"mirror","video":{"codec":"video/hevc","width":
             "audio":{"codec":"audio/opus","rate":48000,"channels":2,"frame_ms":5}}
 receiver → {"t":"ready","video_port":P,"audio_port":Q}      or {"t":"error","code":"start_failed","detail":"..."}
 receiver → {"t":"keyframe"}                                 an IDR is needed (start, or after a loss)
-either   → {"t":"stop"} / receiver → {"t":"stop","by":"receiver"}   (Back on the remote)
+either   → {"t":"stop"} / receiver → {"t":"stop","by":"receiver","reason":"back"|"screen_closed"}
 receiver → {"t":"stats","decode_ms":..,"host_ms":..,"fps":..,"lost":..,"dropped":..,"shown_seq":N,"decoder":".."}
 sender   → {"t":"sender_stats","rtt_ms":..,"host_ms":..,"fps":..,"mbps":..,"encoder":"..","res":"WxH"}
 ```
+
+The receiver ends a session itself with `reason` `back` (Back on the remote) or `screen_closed` (Home, another app
+on top, or the screen staying off). A TV whose screen is asleep is woken by `start`; the picture may be stopped for a
+moment while the TV wakes up, so a stopped screen gets a second to come back before the session counts as closed,
+and the receiver asks for a `keyframe` for the new surface.
 
 The sender sends from a socket bound to the LAN interface (section 2); the receiver takes the sender's address from
 the first packet. `codec` should be `bench.prefer` (section 5) when the sender can encode it.
