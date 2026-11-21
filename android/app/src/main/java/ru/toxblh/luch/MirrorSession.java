@@ -7,6 +7,7 @@ import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.media.MediaCodec;
+import android.graphics.SurfaceTexture;
 import android.media.MediaFormat;
 import android.os.Build;
 import android.os.PowerManager;
@@ -55,6 +56,12 @@ final class MirrorSession {
 
     static volatile MirrorSession current;
 
+    /** Announced on every change: extras "active" (a picture is being received) and "away" (the screen is not shown). */
+    static final String ACTION_STATE = "ru.toxblh.luch.MIRROR_STATE";
+    /** How long the screen may stay away (Home) before the session ends. */
+    private static final long AWAY_LIMIT_MS = 15 * 60_000L;
+    static final String AWAY_TIMEOUT = "away_timeout";
+
     private final Context context;
     final Control control;
     private final String videoMime;
@@ -73,6 +80,13 @@ final class MirrorSession {
     private DatagramSocket videoSocket, audioSocket;
     private volatile boolean ended;
     private volatile Surface surface;
+    /** Stand-in output while the screen is not shown, so the session outlives a visit to the launcher (Android 8+). */
+    private SurfaceTexture standInTexture;
+    private Surface standIn;
+    /** Uptime when the screen was left, 0 while it is shown. */
+    private volatile long awaySince;
+    /** The audio track while it exists: silent while the screen is away, so a minimised stream does not play on. */
+    private volatile AudioTrack activeTrack;
     private final Object surfaceLock = new Object();
     /** The screen came back with a new surface: the decoder is made again for it, from the next IDR. */
     private volatile boolean surfaceSwapped;
@@ -130,6 +144,7 @@ final class MirrorSession {
         s.videoSocket = openSocket();
         s.audioSocket = openSocket();
         current = s;
+        broadcast(context, true, false);
         wakeScreen(context);
         thread(s::videoLoop, "luch-video");
         if (s.audioRate > 0) thread(s::audioLoop, "luch-audio");
@@ -185,6 +200,10 @@ final class MirrorSession {
         end(reason);
     }
 
+    boolean isAway() {
+        return awaySince != 0;
+    }
+
     boolean ended() {
         return ended;
     }
@@ -193,7 +212,39 @@ final class MirrorSession {
         return fps;
     }
 
+    /** Whether the session can go on without the screen (a stand-in surface needs Android 8). */
+    static boolean canStayAway() {
+        return Build.VERSION.SDK_INT >= 26;
+    }
+
+    private synchronized Surface standIn() {
+        if (standIn == null) {
+            standInTexture = new SurfaceTexture(false);   // single-buffered: frames are dropped as new ones come
+            standIn = new Surface(standInTexture);
+        }
+        return standIn;
+    }
+
+    /** The screen was left (Home, another app) or came back: the sound is muted meanwhile and the state announced. */
+    void setAway(boolean away) {
+        if (ended) return;
+        awaySince = away ? SystemClock.uptimeMillis() : 0;
+        AudioTrack t = activeTrack;
+        if (t != null) {
+            try {
+                t.setVolume(away ? 0f : 1f);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        broadcast(context, true, away);
+    }
+
+    static void broadcast(Context context, boolean active, boolean away) {
+        context.sendBroadcast(new Intent(ACTION_STATE).putExtra("active", active).putExtra("away", away));
+    }
+
     void setSurface(Surface s) {
+        if (s == null && canStayAway() && !ended) s = standIn();
         Surface old;
         synchronized (surfaceLock) {
             old = surface;
@@ -485,6 +536,8 @@ final class MirrorSession {
                     if (dec == null) {
                         dec = opusDecoder(data);
                         track = audioTrack();
+                        activeTrack = track;
+                        if (awaySince != 0) track.setVolume(0f);
                         int frames;
                         if (Build.VERSION.SDK_INT >= 24) {
                             // The system may hand out a far larger buffer than asked for (6924 frames, 144 ms, on the
@@ -561,6 +614,7 @@ final class MirrorSession {
                 report("audio", e);
             }
         } finally {
+            activeTrack = null;
             if (track != null) {
                 try {
                     track.stop();
@@ -673,6 +727,11 @@ final class MirrorSession {
                 Log.i(LuchService.TAG, "mirror screen not shown yet: asking again");
                 showScreen(context);
             }
+            long away = awaySince;
+            if (away != 0 && SystemClock.uptimeMillis() - away > AWAY_LIMIT_MS && !ended) {
+                end(AWAY_TIMEOUT);
+                break;
+            }
             long count = decodeCount, sum = decodeUsSum;
             decodeCount = 0;
             decodeUsSum = 0;
@@ -729,6 +788,7 @@ final class MirrorSession {
         }
         Log.i(LuchService.TAG, "mirror ended" + (byReceiver != null ? " here (" + byReceiver + ")" : "") + ": in=" + framesIn + " rendered="
                 + framesRendered + " dropped=" + framesDropped + " lost=" + framesLost + " decoder=" + decoderName);
+        broadcast(context, false, false);
         MirrorActivity.sessionEnded();
     }
 

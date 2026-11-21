@@ -19,7 +19,7 @@ import android.widget.TextView;
 
 /**
  * The picture of a mirroring session: a full-screen SurfaceView (not a TextureView: one copy and one frame less),
- * Wi-Fi held in low-latency mode while it is up. Back, Home or another app on top ends the session.
+ * Wi-Fi held in low-latency mode while it is up. Back ends the session; Home or another app on top only mutes it (Android 8+).
  */
 public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     private static volatile MirrorActivity shown;
@@ -92,18 +92,24 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         super.onStart();
         stopped = false;
         handler.removeCallbacks(closeIfStillStopped);
+        MirrorSession s = MirrorSession.current;
+        if (s != null) s.setAway(false);
     }
 
     /**
-     * Leaving the screen ends the session, so the sender stops capturing. Not at once: a screen started while the TV
-     * was asleep is stopped and started again as the TV wakes up and its lock screen passes (issue #1).
+     * Leaving the screen (Home, another app): where the session can go on without it (Android 8+), it does, with the
+     * sound muted and the decoder drawing on a stand-in surface, until the screen is opened again or 15 minutes pass.
+     * Back ends it. Elsewhere it ends after a short grace, as a screen started while the TV was asleep is stopped and
+     * started again as the TV wakes up and its lock screen passes (issue #1).
      */
     @Override
     protected void onStop() {
         android.util.Log.i(LuchService.TAG, "mirror screen stopped, finishing=" + isFinishing());
         stopped = true;
         handler.removeCallbacks(closeIfStillStopped);
+        MirrorSession s = MirrorSession.current;
         if (isFinishing()) closeIfStillStopped.run();
+        else if (s != null && MirrorSession.canStayAway()) s.setAway(true);
         else handler.postDelayed(closeIfStillStopped, STOP_GRACE_MS);
         super.onStop();
     }
