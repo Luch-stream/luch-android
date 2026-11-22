@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Lets the always-on service bring up the picture when a sender starts; granted with
          "adb shell appops set ru.toxblh.luch SYSTEM_ALERT_WINDOW allow" (Android TV has no settings page for it). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />

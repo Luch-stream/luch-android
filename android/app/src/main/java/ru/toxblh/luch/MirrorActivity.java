@@ -44,8 +44,23 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         SurfaceView view = new SurfaceView(this);
         view.getHolder().addCallback(this);
         FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(0xFF000000);   // the bars beside a picture that does not fill the screen
         root.addView(view, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT));
+                FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+        // The picture keeps its proportions on any screen (a phone is not 16:9): fit it in the window, bars on the sides.
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            MirrorSession s = MirrorSession.current;
+            int pw = r - l, ph = b - t;
+            if (s == null || pw <= 0 || ph <= 0 || s.videoWidth() <= 0 || s.videoHeight() <= 0) return;
+            float k = Math.min(pw / (float) s.videoWidth(), ph / (float) s.videoHeight());
+            int w = Math.round(s.videoWidth() * k), h = Math.round(s.videoHeight() * k);
+            FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) view.getLayoutParams();
+            if (p.width != w || p.height != h) {
+                p.width = w;
+                p.height = h;
+                view.post(view::requestLayout);
+            }
+        });
         // Moonlight-style statistics in the corner, toggled with OK (or Info / Menu) and remembered.
         stats = new TextView(this);
         stats.setTypeface(Typeface.MONOSPACE);

@@ -56,6 +56,11 @@ public class StatusActivity extends Activity {
         root.addView(update, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
         setContentView(root);
+        // A sender's offer to open the screen comes as a notification (Android 13+ asks once).
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {"android.permission.POST_NOTIFICATIONS"}, 1);
+        }
     }
 
     @Override

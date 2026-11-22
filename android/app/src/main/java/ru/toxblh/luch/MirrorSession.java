@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package ru.toxblh.luch;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.SurfaceTexture;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.media.MediaCodec;
-import android.graphics.SurfaceTexture;
 import android.media.MediaFormat;
 import android.os.Build;
 import android.os.PowerManager;
@@ -712,6 +717,51 @@ final class MirrorSession {
 
     /** Seconds to keep asking for the screen; then the session ends, reason "screen_not_shown". */
     private static final int SHOW_TRIES = 8;
+    /** The same, once a notification to tap is up: the person needs time to pull the shade down and tap it. */
+    private static final int OFFER_TRIES = 60;
+    private static final int OFFER_ID = 2;
+    private static final String OFFER_CHANNEL = "mirror_offer";
+    private boolean offered;
+
+    int videoWidth() { return width; }
+    int videoHeight() { return height; }
+
+    /**
+     * Android will not let an app in the background open its screen by itself. A notification can: a tap on it is the
+     * person's own action. Returns false when notifications are not allowed (Android 13+ asks once, in StatusActivity).
+     */
+    private boolean postOffer() {
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                != PackageManager.PERMISSION_GRANTED) return false;
+        NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return false;
+        Notification.Builder b;
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(new NotificationChannel(OFFER_CHANNEL,
+                    context.getString(R.string.offer_channel), NotificationManager.IMPORTANCE_HIGH));
+            b = new Notification.Builder(context, OFFER_CHANNEL);
+        } else {
+            b = new Notification.Builder(context).setPriority(Notification.PRIORITY_HIGH);
+        }
+        java.util.List<Luch.Peer> peers = Luch.connected();
+        String who = peers.isEmpty() ? context.getString(R.string.offer_someone) : peers.get(0).name;
+        PendingIntent open = PendingIntent.getActivity(context, 0,
+                new Intent(context, MirrorActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
+        nm.notify(OFFER_ID, b.setSmallIcon(R.drawable.ic_luch)
+                .setContentTitle(context.getString(R.string.offer_title, who))
+                .setContentText(context.getString(R.string.offer_text))
+                .setCategory(Notification.CATEGORY_CALL)
+                .setContentIntent(open).setFullScreenIntent(open, true).setAutoCancel(true).build());
+        return true;
+    }
+
+    private void cancelOffer() {
+        if (!offered) return;
+        offered = false;
+        NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) nm.cancel(OFFER_ID);
+    }
     static final String SCREEN_NOT_SHOWN = "screen_not_shown";
 
     private void statsLoop() {
@@ -721,12 +771,15 @@ final class MirrorSession {
             // The system may refuse to open the screen for a while: for 5 s after Home on older Android, or without
             // the "display over other apps" permission. Ask again each second, then give up saying why.
             if (surface == null && !MirrorActivity.isShown() && !ended) {
-                if (++tries > SHOW_TRIES) {
+                if (++tries == 2 && !offered) offered = postOffer();
+                if (tries > (offered ? OFFER_TRIES : SHOW_TRIES)) {
                     end(SCREEN_NOT_SHOWN);
                     break;
                 }
-                Log.i(LuchService.TAG, "mirror screen not shown yet: asking again");
+                Log.i(LuchService.TAG, "mirror screen not shown yet: asking again" + (offered ? ", notification up" : ""));
                 showScreen(context);
+            } else if (offered) {
+                cancelOffer();
             }
             long away = awaySince;
             if (away != 0 && SystemClock.uptimeMillis() - away > AWAY_LIMIT_MS && !ended) {
@@ -764,6 +817,7 @@ final class MirrorSession {
 
     /** Ends the session; {@code byReceiver} is the reason when the receiver ends it, null otherwise. */
     private void end(String byReceiver) {
+        cancelOffer();
         synchronized (this) {
             if (ended) return;
             ended = true;

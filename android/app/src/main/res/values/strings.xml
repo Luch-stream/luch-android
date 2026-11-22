@@ -2,6 +2,10 @@
 <resources>
     <string name="app_name" translatable="false">Luch</string>
     <string name="notification_text">Ready to receive</string>
+    <string name="offer_channel">Incoming screen</string>
+    <string name="offer_title">Luch: %s shows its screen</string>
+    <string name="offer_text">Tap to open it</string>
+    <string name="offer_someone">a sender</string>
     <string name="toast_connected">Luch: %s connected</string>
     <string name="status_name">Name: %s</string>
     <string name="status_address">Address: %1$s, port %2$d</string>
