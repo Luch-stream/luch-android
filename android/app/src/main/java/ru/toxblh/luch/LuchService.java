@@ -32,6 +32,7 @@ public class LuchService extends Service {
     private NsdManager nsd;
     private NsdManager.RegistrationListener registration;
     private NsdManager.DiscoveryListener discovery;
+    private NsdManager.DiscoveryListener discoveryReceivers;
     private ControlServer server;
     private final Handler main = new Handler(Looper.getMainLooper());
     /** NsdManager resolves one service at a time; the rest wait here. */
@@ -55,6 +56,7 @@ public class LuchService extends Service {
         }
         announce(port);
         browseSenders();
+        browseReceivers();
         // After install or a firmware update there is no measurement yet: take it once things have settled.
         main.postDelayed(() -> Bench.autoRun(this, ControlServer::broadcastBench), 20_000);
         Updater.schedule(this, main);   // only in the GitHub build
@@ -73,6 +75,7 @@ public class LuchService extends Service {
         }
         try {
             if (discovery != null) nsd.stopServiceDiscovery(discovery);
+            if (discoveryReceivers != null) nsd.stopServiceDiscovery(discoveryReceivers);
         } catch (RuntimeException ignored) {
         }
         if (server != null) server.stop();
@@ -204,6 +207,42 @@ public class LuchService extends Service {
         nsd.discoverServices(Luch.TYPE_SENDER, NsdManager.PROTOCOL_DNS_SD, discovery);
     }
 
+    /** The other receivers on the network: where this device can show its own screen. */
+    private void browseReceivers() {
+        discoveryReceivers = new NsdManager.DiscoveryListener() {
+            @Override
+            public void onDiscoveryStarted(String type) {
+            }
+
+            @Override
+            public void onServiceFound(NsdServiceInfo s) {
+                main.post(() -> {
+                    toResolve.add(s);
+                    resolveNext();
+                });
+            }
+
+            @Override
+            public void onServiceLost(NsdServiceInfo s) {
+                Luch.receiverGone(s.getServiceName());
+            }
+
+            @Override
+            public void onDiscoveryStopped(String type) {
+            }
+
+            @Override
+            public void onStartDiscoveryFailed(String type, int error) {
+                Log.w(TAG, "browse receivers failed " + error);
+            }
+
+            @Override
+            public void onStopDiscoveryFailed(String type, int error) {
+            }
+        };
+        nsd.discoverServices(Luch.TYPE_RECEIVER, NsdManager.PROTOCOL_DNS_SD, discoveryReceivers);
+    }
+
     @SuppressWarnings("deprecation")   // resolveService: its replacement needs API 34, this runs from 26
     private void resolveNext() {
         if (resolving || toResolve.isEmpty()) return;
@@ -224,8 +263,14 @@ public class LuchService extends Service {
                 String id = text(txt, "id", s.getServiceName());
                 String name = text(txt, "name", s.getServiceName());
                 String host = s.getHost() == null ? "" : s.getHost().getHostAddress();
-                Log.i(TAG, "sender nearby: " + name + " " + host + " id=" + id);
-                Luch.nearby(s.getServiceName(), new Luch.Peer(id, name, host));
+                if (s.getServiceType() != null && s.getServiceType().contains("luchsrc")) {
+                    Log.i(TAG, "sender nearby: " + name + " " + host + " id=" + id);
+                    Luch.nearby(s.getServiceName(), new Luch.Peer(id, name, host));
+                } else if (!id.equals(Luch.id(LuchService.this))) {
+                    Log.i(TAG, "receiver nearby: " + name + " " + host + ":" + s.getPort() + " id=" + id);
+                    Luch.receiver(s.getServiceName(), new Luch.Receiver(id, name, text(txt, "model", ""), host,
+                            s.getPort(), text(txt, "dec", "")));
+                }
                 main.post(() -> {
                     resolving = false;
                     resolveNext();

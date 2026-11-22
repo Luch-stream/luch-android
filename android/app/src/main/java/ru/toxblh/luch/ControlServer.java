@@ -174,6 +174,11 @@ final class ControlServer {
                         break;
                     }
                     case "start":
+                        if (Sender.active()) {
+                            // This device is showing its own screen: one direction at a time.
+                            send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "start"));
+                            break;
+                        }
                         if (!"mirror".equals(msg.optString("mode"))) {
                             send(out, new JSONObject().put("t", "error").put("code", "start_failed")
                                     .put("detail", "mode " + msg.optString("mode") + " not supported"));

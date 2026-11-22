@@ -36,12 +36,32 @@ final class Luch {
         }
     }
 
+    /** A receiver announced nearby: where this device can show its screen. */
+    static final class Receiver {
+        final String id;
+        final String name;
+        final String model;
+        final String address;
+        final int port;
+        final String codecs;
+
+        Receiver(String id, String name, String model, String address, int port, String codecs) {
+            this.id = id;
+            this.name = name;
+            this.model = model;
+            this.address = address;
+            this.port = port;
+            this.codecs = codecs;
+        }
+    }
+
     interface Listener {
         void changed();
     }
 
     private static final Map<String, Peer> CONNECTED = new LinkedHashMap<>();
     private static final Map<String, Peer> NEARBY = new LinkedHashMap<>();
+    private static final Map<String, Receiver> RECEIVERS = new LinkedHashMap<>();
     private static final List<Listener> LISTENERS = new CopyOnWriteArrayList<>();
     static volatile String status = "";
 
@@ -56,6 +76,30 @@ final class Luch {
             prefs.edit().putString("id", id).apply();
         }
         return id;
+    }
+
+    /** Whether the receiver is switched on (the quick settings tile and the status screen turn it off and on). */
+    static boolean enabled(Context context) {
+        return context.getSharedPreferences("luch", Context.MODE_PRIVATE).getBoolean("enabled", true);
+    }
+
+    static void setEnabled(Context context, boolean on) {
+        context.getSharedPreferences("luch", Context.MODE_PRIVATE).edit().putBoolean("enabled", on).apply();
+        if (on) {
+            LuchService.start(context);
+        } else {
+            context.stopService(new android.content.Intent(context, LuchService.class));
+        }
+        notifyListeners();
+    }
+
+    /** Whether a sender's offer to show its screen is put in a notification to tap (on by default). */
+    static boolean offerNotification(Context context) {
+        return context.getSharedPreferences("luch", Context.MODE_PRIVATE).getBoolean("offer_notification", true);
+    }
+
+    static void setOfferNotification(Context context, boolean on) {
+        context.getSharedPreferences("luch", Context.MODE_PRIVATE).edit().putBoolean("offer_notification", on).apply();
     }
 
     /** The name people gave the TV in its settings, else the model. */
@@ -113,6 +157,20 @@ final class Luch {
 
     static synchronized void gone(String serviceName) {
         if (NEARBY.remove(serviceName) != null) notifyListeners();
+    }
+
+    /** Keyed by the mDNS service name. */
+    static synchronized void receiver(String serviceName, Receiver r) {
+        RECEIVERS.put(serviceName, r);
+        notifyListeners();
+    }
+
+    static synchronized void receiverGone(String serviceName) {
+        if (RECEIVERS.remove(serviceName) != null) notifyListeners();
+    }
+
+    static synchronized List<Receiver> receivers() {
+        return Collections.unmodifiableList(new ArrayList<>(RECEIVERS.values()));
     }
 
     static synchronized List<Peer> connected() {
