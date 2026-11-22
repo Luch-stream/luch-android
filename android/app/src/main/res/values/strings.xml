@@ -13,4 +13,5 @@
     <string name="update_to">Update to %s</string>
     <string name="update_installing">Updating…</string>
     <string name="update_allow">To update, allow Luch to install apps: Settings → Apps → Special app access → Install unknown apps.</string>
+    <string name="hot_badge">🔥 hot — lower the quality</string>
 </resources>

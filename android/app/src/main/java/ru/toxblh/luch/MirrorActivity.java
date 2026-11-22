@@ -3,6 +3,9 @@ package ru.toxblh.luch;
 
 import android.app.Activity;
 import android.net.wifi.WifiManager;
+import android.content.Context;
+import android.content.Intent;
+import android.view.Display;
 import android.os.Build;
 import android.os.Bundle;
 import android.content.SharedPreferences;
@@ -17,12 +20,21 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
+import android.view.View;
+
 /**
  * The picture of a mirroring session: a full-screen SurfaceView (not a TextureView: one copy and one frame less),
  * Wi-Fi held in low-latency mode while it is up. Back ends the session; Home or another app on top only mutes it (Android 8+).
  */
 public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     private static volatile MirrorActivity shown;
+    /** What the picture is actually being rendered into, for the stats overlay. */
+    private static volatile String surfaceInfo = "?";
+    private FitSurfaceView surfaceView;
+    /** Always-visible "the device is hot" badge, independent of the debug overlay. */
+    private static volatile TextView hotBadge;
+    /** The session this screen is showing; a newer one must not be stopped by this screen's teardown. */
+    private MirrorSession session;
     private WifiManager.WifiLock wifiLock;
     private TextView stats;
     private boolean statsOn;
@@ -41,11 +53,13 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         }
         // Ask the display for its game mode: the least picture processing, the least delay (Moonlight does the same).
         if (Build.VERSION.SDK_INT >= 30) getWindow().setPreferMinimalPostProcessing(true);
-        SurfaceView view = new SurfaceView(this);
-        view.getHolder().addCallback(this);
+        surfaceView = new FitSurfaceView(this);
+        surfaceView.getHolder().addCallback(this);
         FrameLayout root = new FrameLayout(this);
-        root.addView(view, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams videoParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        videoParams.gravity = Gravity.CENTER;
+        root.addView(surfaceView, videoParams);
         // Moonlight-style statistics in the corner, toggled with OK (or Info / Menu) and remembered.
         stats = new TextView(this);
         stats.setTypeface(Typeface.MONOSPACE);
@@ -65,7 +79,24 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         shown = this;
-        if (MirrorSession.current == null) finish();
+        requestFastDisplay();
+
+        TextView badge = new TextView(this);
+        // Just the icon: the text version was too loud for a permanent badge.
+        badge.setText("🔥");
+        badge.setContentDescription(getString(R.string.hot_badge));
+        badge.setTextSize(22);
+        badge.setTextColor(0xFFFFD9A0);
+        badge.setBackgroundColor(0xCC3A2A12);
+        badge.setPadding(pad, pad / 3, pad, pad / 3);
+        FrameLayout.LayoutParams badgeParams = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        badgeParams.gravity = Gravity.TOP | Gravity.END;
+        badgeParams.setMargins(0, pad * 2, pad * 2, 0);
+        badge.setVisibility(View.GONE);
+        root.addView(badge, badgeParams);
+        hotBadge = badge;
+        bindSession();
     }
 
     @Override
@@ -114,6 +145,35 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         super.onStop();
     }
 
+    /** Ask the panel for its highest refresh rate: the display adds up to a frame period on top of decode. */
+    private void requestFastDisplay() {
+        Display d = getDisplay();
+        if (d == null) return;
+        int fastest = 0;
+        int fastestMode = 0;
+        int nativeWidth = d.getMode().getPhysicalWidth();
+        for (Display.Mode mode : d.getSupportedModes()) {
+            int hz = Math.round(mode.getRefreshRate());
+            // The panel's native width at its highest rate: a mode the system can switch to without a resize.
+            if (hz > fastest && mode.getPhysicalWidth() == nativeWidth) {
+                fastest = hz;
+                fastestMode = mode.getModeId();
+            }
+        }
+        if (fastest <= 0) return;
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.preferredRefreshRate = fastest;
+        lp.preferredDisplayModeId = fastestMode;
+        getWindow().setAttributes(lp);
+    }
+
+    /** Turns the always-on heat warning on or off; the debug overlay is a separate thing. */
+    static void setHot(boolean hot) {
+        TextView badge = hotBadge;
+        if (badge == null) return;
+        badge.post(() -> badge.setVisibility(hot ? View.VISIBLE : View.GONE));
+    }
+
     /** How long a stopped screen may take to come back before the session counts as closed. */
     private static final long STOP_GRACE_MS = 1_000;
     private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
@@ -124,6 +184,32 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         if (s != null && !s.ended()) s.stopByReceiver(MirrorSession.SCREEN_CLOSED);
         if (!isFinishing()) finish();
     };
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        bindSession();
+    }
+
+    /** Points this screen at the current session and hands it the surface again after a rebuild. */
+    private void bindSession() {
+        session = MirrorSession.current;
+        MirrorSession s = session;
+        if (s == null) {
+            finish();
+            return;
+        }
+        if (surfaceView != null && s.height() > 0) {
+            // Letterbox instead of stretching: the desktop keeps its shape on a 20:9 phone.
+            surfaceView.setAspect(s.width() / (float) s.height());
+            surfaceView.requestLayout();
+        }
+        SurfaceHolder holder = surfaceView == null ? null : surfaceView.getHolder();
+        if (holder != null && holder.getSurface() != null && holder.getSurface().isValid()) {
+            s.setSurface(holder.getSurface());
+        }
+    }
 
     @Override
     protected void onDestroy() {
@@ -188,27 +274,62 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         if (a != null) a.runOnUiThread(a::finish);
     }
 
+    /** A SurfaceView that keeps the stream's aspect ratio inside the screen, with bars. */
+    private static final class FitSurfaceView extends SurfaceView {
+        private float aspect = 16f / 9f;
+
+        FitSurfaceView(Context context) {
+            super(context);
+        }
+
+        void setAspect(float value) {
+            if (value > 0 && Math.abs(value - aspect) > 0.001f) {
+                aspect = value;
+                requestLayout();
+            }
+        }
+
+        @Override
+        protected void onMeasure(int widthSpec, int heightSpec) {
+            int width = MeasureSpec.getSize(widthSpec);
+            int height = MeasureSpec.getSize(heightSpec);
+            if (width > 0 && height > 0) {
+                if (width / (float) height > aspect) {
+                    width = Math.round(height * aspect);
+                } else {
+                    height = Math.round(width / aspect);
+                }
+            }
+            setMeasuredDimension(width, height);
+        }
+    }
+
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         MirrorSession s = MirrorSession.current;
+        session = s;
         if (s == null) return;
         Surface surface = holder.getSurface();
-        if (Build.VERSION.SDK_INT >= 30) {
-            try {
-                surface.setFrameRate(s.fps(), Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
-            } catch (RuntimeException ignored) {
-            }
-        }
+        // Do not pin the panel to the stream rate: at its top refresh the compositor presents a finished
+        // frame at the next 1/120 s boundary instead of waiting for the next 1/60 s one.
         s.setSurface(surface);
     }
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        Display d = getDisplay();
+        int hz = d == null ? 0 : Math.round(d.getRefreshRate());
+        surfaceInfo = width + "x" + height + (hz > 0 ? "@" + hz + "Hz" : "");
+    }
+
+    /** Rendering surface size and refresh rate, or "?" before the surface exists. */
+    static String surfaceInfo() {
+        return surfaceInfo;
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
-        MirrorSession s = MirrorSession.current;
+        MirrorSession s = session;
         if (s != null) s.setSurface(null);
     }
 }

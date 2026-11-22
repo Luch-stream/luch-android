@@ -45,6 +45,8 @@ public class LuchService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        // Battery, charging and thermal: cached from system callbacks, reported only on change.
+        DeviceState.attach(this);
         goForeground();
         nsd = Compat.service(this, NsdManager.class);
         server = new ControlServer(this);
@@ -76,6 +78,7 @@ public class LuchService extends Service {
         } catch (RuntimeException ignored) {
         }
         if (server != null) server.stop();
+        DeviceState.detach(this);
         super.onDestroy();
     }
 

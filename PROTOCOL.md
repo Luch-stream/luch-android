@@ -57,6 +57,8 @@ receiver → {"t":"keyframe"}                                 an IDR is needed (
 either   → {"t":"stop"} / receiver → {"t":"stop","by":"receiver","reason":"back"|"screen_closed"|"screen_not_shown"}
 receiver → {"t":"stats","decode_ms":..,"host_ms":..,"fps":..,"lost":..,"dropped":..,"shown_seq":N,"decoder":"..",
             "audio_latency_ms":N,"video_hold_ms":N}
+           may also carry "battery" (percent), "charging", "thermal"
+           ("none|light|moderate|severe|critical|emergency|shutdown"), "power_save", "interactive"
 sender   → {"t":"sender_stats","rtt_ms":..,"host_ms":..,"fps":..,"mbps":..,"encoder":"..","res":"WxH"}
 ```
 
@@ -106,10 +108,23 @@ again, and again after about RTT + 100 ms if none comes. Of the frames decoded a
 
 - `hw`: read from the hardware, instant. `video`: per MIME type with a hardware decoder, `decoder`, `max` (WxH),
   `1080p60`, `1080p120`, `2160p30`, `2160p60`, `10bit`, `low_latency` (booleans). `audio`: MIME types with any
-  decoder. `display`: `modes` ("WxH@Hz"), `hdr`, `game_mode` (minimal post-processing / ALLM).
+  decoder. `display`: `modes` ("WxH@Hz"), `hdr`, `game_mode` (minimal post-processing / ALLM). `device`: a snapshot
+  of `battery`, `charging`, `thermal`, `power_save`, `interactive` (phones and tablets).
+
+The device fields are event-driven: the receiver caches them from system callbacks (a sticky battery
+broadcast, screen on/off, power-save and thermal listeners) and repeats them in `stats` **only when they
+change**. A sender must keep the last value it saw and must not assume the fields are present.
+
+`battery` (percent) and `charge_mah` (milliamp-hours, when the device exposes a charge counter) are sent
+with a hysteresis: only when the counter moved by 100 mAh (or 3 percentage points if there is no counter).
+`charging` is sent immediately when the cable goes in or out, and `thermal`, `power_save` and `interactive`
+on every change, all in the same `stats` line that already flows once a second.
 - `bench`: measured, or `null` until done. Per video MIME type `{ms, p95, frames, decoder}` (or `{error}`): decode
   latency at 1920x1080, 60 fps, low-latency configuration, queueInputBuffer → output. `prefer`: the MIME type to
-  encode for (fastest; an earlier entry in avc, hevc, vp9, av1 wins unless a later one is 0.5 ms faster).
+  encode for, chosen by a weighted score rather than raw speed: each codec gets a compression-efficiency
+  credit (AV1 30, HEVC 25, VP9 20, H.264 0) minus 2 points per millisecond of measured decode latency.
+  `bench[mime].score` carries that number, and `bench.weights` describes the formula. A sender that cannot
+  encode `prefer` falls back to its own judgement.
 
 The receiver measures by itself after install, an app update or a firmware update, and at a sender's first hello
 when there is no result yet, but only while nothing plays (a video would lose its decoder); then it sends

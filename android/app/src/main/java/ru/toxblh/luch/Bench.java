@@ -41,8 +41,19 @@ final class Bench {
             {"video/x-vnd.on2.vp9", "bench/vp9.ivf"},
             {"video/av01", "bench/av1.ivf"},
     };
-    /** Codecs in order of preference when they decode about as fast: the more senders can encode it, the better. */
-    private static final List<String> ORDER = Arrays.asList("video/avc", "video/hevc", "video/x-vnd.on2.vp9", "video/av01");
+    /**
+     * What a codec is worth beyond raw speed: compression efficiency, in the same units the measured
+     * latency is scored with (2 points per millisecond). HEVC needs ~25% less bitrate than H.264 for
+     * the same picture, AV1 a little less still, VP9 sits between; H.264 is the baseline.
+     */
+    private static final java.util.Map<String, Double> EFFICIENCY = new java.util.HashMap<>();
+    static {
+        EFFICIENCY.put("video/av01", 30.0);
+        EFFICIENCY.put("video/hevc", 25.0);
+        EFFICIENCY.put("video/x-vnd.on2.vp9", 20.0);
+        EFFICIENCY.put("video/avc", 0.0);
+    }
+    private static final double PER_MS = 2.0;
     private static final int W = 1920, H = 1080, FPS = 60;
     /** The first frames include the decoder warming up; they are not counted. */
     private static final int WARMUP = 5;
@@ -106,7 +117,7 @@ final class Bench {
         try {
             JSONObject result = new JSONObject();
             String best = null;
-            double bestMs = Double.MAX_VALUE;
+            double bestScore = -Double.MAX_VALUE;
             for (String[] clip : CLIPS) {
                 String mime = clip[0];
                 if (LowLatencyDecoder.hardwareDecoder(mime) == null) continue;
@@ -117,18 +128,22 @@ final class Bench {
                     Log.w(LuchService.TAG, "bench " + mime, e);
                     r = new JSONObject().put("error", String.valueOf(e));
                 }
-                result.put(mime, r);
                 double ms = r.optDouble("ms", Double.NaN);
                 if (!Double.isNaN(ms)) {
-                    // A codec later in the list has to be clearly faster (0.5 ms) to win.
-                    if (best == null || ms < bestMs - 0.5) {
+                    // Cheap to decode and cheap on the wire: the receiver recommends the best trade-off,
+                    // not merely the fastest decoder.
+                    double score = EFFICIENCY.getOrDefault(mime, 0.0) - PER_MS * ms;
+                    r.put("score", Math.round(score * 10.0) / 10.0);
+                    if (best == null || score > bestScore) {
                         best = mime;
-                        bestMs = ms;
+                        bestScore = score;
                     }
                 }
+                result.put(mime, r);
                 Log.i(LuchService.TAG, "bench " + mime + ": " + r);
             }
             result.put("prefer", best == null ? JSONObject.NULL : best);
+            result.put("weights", "efficiency av01=30 hevc=25 vp9=20 avc=0; per_ms=" + PER_MS);
             result.put("res", W + "x" + H);
             result.put("key", key(context));
             prefs(context).edit().putString("bench", result.toString()).apply();
