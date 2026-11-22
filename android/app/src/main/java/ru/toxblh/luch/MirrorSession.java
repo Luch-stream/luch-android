@@ -84,7 +84,10 @@ final class MirrorSession {
     private String decoderName = "";
     private long curSeq = -1;
     private int curShards, curGot, curFlags, curLen;
-    private byte[][] curData;
+    /** The frame being assembled: shards are copied straight to their place, one buffer for the whole session. */
+    private final byte[] frameBuf = new byte[MAX_SHARDS * SHARD];
+    private final boolean[] curSeen = new boolean[MAX_SHARDS];
+    private boolean curActive;
     private long lastDelivered = -1;
     /** Waiting for an IDR after a loss (or at the start). */
     private boolean waitIdr = true;
@@ -274,8 +277,8 @@ final class MirrorSession {
         if (seq <= lastDelivered || (curSeq >= 0 && seq < curSeq)) return;   // late or duplicate
         if (seq != curSeq) {
             // A packet of a later frame: the one in flight, if any, will never complete.
-            if (curData != null && curGot < curShards) lost("frame " + curSeq + " incomplete");
-            if (curSeq >= 0 && seq > curSeq + 1 && curData == null && lastDelivered < seq - 1) {
+            if (curActive && curGot < curShards) lost("frame " + curSeq + " incomplete");
+            if (curSeq >= 0 && seq > curSeq + 1 && !curActive && lastDelivered < seq - 1) {
                 lost("frames " + (lastDelivered + 1) + ".." + (seq - 1) + " missing");
             }
             curSeq = seq;
@@ -283,25 +286,17 @@ final class MirrorSession {
             curGot = 0;
             curFlags = 0;
             curLen = frameLen;
-            curData = new byte[shards][];
+            java.util.Arrays.fill(curSeen, 0, shards, false);
+            curActive = true;
         }
-        if (curData == null || shards != curShards || curData[idx] != null) return;
-        byte[] shard = new byte[Math.min(SHARD, n - HEADER)];
-        System.arraycopy(buf, HEADER, shard, 0, shard.length);
-        curData[idx] = shard;
+        if (!curActive || shards != curShards || curSeen[idx]) return;
+        System.arraycopy(buf, HEADER, frameBuf, idx * SHARD, Math.min(SHARD, n - HEADER));
+        curSeen[idx] = true;
         curGot++;
         curFlags |= flags;
         if (curGot < curShards) return;
 
-        byte[] frame = new byte[curLen];
-        int off = 0;
-        for (byte[] s : curData) {
-            int take = Math.min(s.length, curLen - off);
-            if (take <= 0) break;
-            System.arraycopy(s, 0, frame, off, take);
-            off += take;
-        }
-        curData = null;
+        curActive = false;
         if (lastDelivered >= 0 && seq != lastDelivered + 1) lost("gap before frame " + seq);
         lastDelivered = seq;
         framesIn++;
@@ -321,7 +316,7 @@ final class MirrorSession {
             idrRequested = false;
             droppedInRow = 0;
         }
-        decode(frame, idr, seq);
+        decode(frameBuf, curLen, idr, seq);
     }
 
     private void lost(String why) {
@@ -344,7 +339,7 @@ final class MirrorSession {
 
     // ---- video: decode and render --------------------------------------------------------------------------
 
-    private void decode(byte[] frame, boolean idr, long seq) throws IOException {
+    private void decode(byte[] frame, int len, boolean idr, long seq) throws IOException {
         int index;
         try {
             // Short normally; longer for an IDR and the first frames, while the decoder sets up its output buffers.
@@ -363,13 +358,13 @@ final class MirrorSession {
         try {
             ByteBuffer in = decoder.getInputBuffer(index);
             in.clear();
-            in.put(frame);
+            in.put(frame, 0, len);
             synchronized (ptsRing) {
                 ptsRing[ringPos] = ptsUs;
                 seqRing[ringPos] = seq;
                 ringPos = (ringPos + 1) % ptsRing.length;
             }
-            decoder.queueInputBuffer(index, 0, frame.length, ptsUs, idr ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
+            decoder.queueInputBuffer(index, 0, len, ptsUs, idr ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
         } catch (IllegalStateException e) {
             resetDecoder("decoder failed: " + e);
         }
@@ -455,6 +450,8 @@ final class MirrorSession {
 
     // ---- audio ---------------------------------------------------------------------------------------------
 
+    private static final int AUDIO_BUFFER_STEP_MS = 10, MAX_AUDIO_BUFFER_MS = 100;
+
     private void audioLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
         byte[] buf = new byte[HEADER + SHARD + 64];
@@ -465,6 +462,9 @@ final class MirrorSession {
         long startedAt = SystemClock.uptimeMillis();
         long lastSeq = -1;
         byte[] pcm = new byte[0];
+        boolean playing = false;
+        int bufMs = 0, underruns = 0;
+        long checkedAt = SystemClock.uptimeMillis();
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
         try {
             while (!ended) {
@@ -500,9 +500,26 @@ final class MirrorSession {
                         }
                         audioLatencyMs = frames * 1000 / audioRate;
                         if (audioSync) videoHoldNs = audioLatencyMs * 1_000_000L;
-                        track.play();
+                        bufMs = frames * 1000 / audioRate;
+                        // Not played yet: a fast track that runs dry before the first sound arrives (the first half
+                        // second is dropped below) is switched off by the mixer and stays silent for the session.
+                        // It starts with the first sound written.
                     }
                     continue;
+                }
+                // A track that ran dry (a late packet, a pause of the garbage collector) crackles: give it more room,
+                // a step at a time, and keep it for the session. Costs that much more sound delay, only when needed.
+                if (track != null && Build.VERSION.SDK_INT >= 24 && SystemClock.uptimeMillis() - checkedAt >= 1000) {
+                    checkedAt = SystemClock.uptimeMillis();
+                    int u = track.getUnderrunCount();
+                    if (u > underruns && bufMs < MAX_AUDIO_BUFFER_MS) {
+                        bufMs += AUDIO_BUFFER_STEP_MS;
+                        int frames = track.setBufferSizeInFrames(audioRate * bufMs / 1000);
+                        audioLatencyMs = frames * 1000 / audioRate;
+                        if (audioSync) videoHoldNs = audioLatencyMs * 1_000_000L;
+                        Log.i(LuchService.TAG, "audio underruns " + u + ": buffer now " + audioLatencyMs + " ms");
+                    }
+                    underruns = u;
                 }
                 if (dec == null || seq <= lastSeq) continue;
                 lastSeq = seq;
@@ -529,6 +546,10 @@ final class MirrorSession {
                         } else {
                             o.position(info.offset).limit(info.offset + info.size);   // the byte[] form is Android 6
                             track.write(o, info.size, AudioTrack.WRITE_NON_BLOCKING);
+                        }
+                        if (!playing) {
+                            track.play();
+                            playing = true;
                         }
                     }
                     dec.releaseOutputBuffer(out, false);
