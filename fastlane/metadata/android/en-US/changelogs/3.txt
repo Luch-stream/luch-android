@@ -1,0 +1,1 @@
+Android 5.0+ support, safer updates for the GitHub build, and diagnostic reports available to the sender. Smoother sound with adaptive buffering and fewer video allocations. On Android 8+, Home keeps the session running silently for up to 15 minutes; returning restores the picture and sound. Launchers can query the session state.

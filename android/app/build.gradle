@@ -20,8 +20,8 @@ android {
         minSdk 21
         targetSdk 34
         // -PluchVersionCode / -PluchVersionName: only for trying an update on an emulator (docs/updates.md).
-        versionCode Integer.parseInt(String.valueOf(project.findProperty('luchVersionCode') ?: '2'))
-        versionName String.valueOf(project.findProperty('luchVersionName') ?: '0.2')
+        versionCode Integer.parseInt(String.valueOf(project.findProperty('luchVersionCode') ?: '3'))
+        versionName String.valueOf(project.findProperty('luchVersionName') ?: '0.3')
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 

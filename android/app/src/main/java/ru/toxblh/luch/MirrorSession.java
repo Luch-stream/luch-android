@@ -218,8 +218,9 @@ final class MirrorSession {
     }
 
     private synchronized Surface standIn() {
+        if (Build.VERSION.SDK_INT < 26) return null;
         if (standIn == null) {
-            standInTexture = new SurfaceTexture(false);   // single-buffered: frames are dropped as new ones come
+            standInTexture = new SurfaceTexture(false);
             standIn = new Surface(standInTexture);
         }
         return standIn;
