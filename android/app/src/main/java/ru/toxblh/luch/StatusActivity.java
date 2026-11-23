@@ -433,7 +433,16 @@ public class StatusActivity extends Activity {
         sound.setPadding(dp(20), dp(16), dp(20), dp(16));
         sound.addView(Ui.text(this, getString(R.string.sound_label), 17, Ui.TEXT, false), new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        sound.addView(Ui.text(this, getString(R.string.soon), 15, Ui.MUTED, false));
+        if (Build.VERSION.SDK_INT >= 29) {
+            Switch sw = new Switch(this);
+            sw.setTrackDrawable(getResources().getDrawable(R.drawable.switch_track));
+            sw.setThumbDrawable(getResources().getDrawable(R.drawable.switch_thumb));
+            sw.setChecked(getSharedPreferences("luch", MODE_PRIVATE).getBoolean("send_audio", true));
+            sw.setOnCheckedChangeListener((b, on) -> getSharedPreferences("luch", MODE_PRIVATE).edit().putBoolean("send_audio", on).apply());
+            sound.addView(sw);
+        } else {
+            sound.addView(Ui.text(this, getString(R.string.sound_android10), 15, Ui.MUTED, false));
+        }
         content.addView(sound, Ui.below(this, 20));
     }
 
@@ -444,6 +453,24 @@ public class StatusActivity extends Activity {
     /** Android asks once per session whether this app may record the screen; the answer starts the capture. */
     private void startSend(Luch.Receiver r) {
         pending = r;
+        // the sound of the phone is captured under the microphone permission (Android 10+): asked once, here
+        if (Build.VERSION.SDK_INT >= 29 && getSharedPreferences("luch", MODE_PRIVATE).getBoolean("send_audio", true)
+                && checkSelfPermission("android.permission.RECORD_AUDIO") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {"android.permission.RECORD_AUDIO"}, REQUEST_AUDIO);
+            return;
+        }
+        askCapture();
+    }
+
+    private static final int REQUEST_AUDIO = 79;
+
+    @Override
+    public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (request == REQUEST_AUDIO && pending != null) askCapture(); // without it the picture goes alone
+    }
+
+    private void askCapture() {
         android.media.projection.MediaProjectionManager m =
                 (android.media.projection.MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         startActivityForResult(m.createScreenCaptureIntent(), REQUEST_CAPTURE);

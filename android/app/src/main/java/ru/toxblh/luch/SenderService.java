@@ -21,7 +21,8 @@ public class SenderService extends Service {
 
     static void start(Context context, int resultCode, Intent projectionData, String receiverId, String codec) {
         Intent i = new Intent(context, SenderService.class).putExtra("code", resultCode).putExtra("data", projectionData)
-                .putExtra("rx", receiverId).putExtra("codec", codec);
+                .putExtra("rx", receiverId).putExtra("codec", codec)
+                .putExtra("audio", context.getSharedPreferences("luch", Context.MODE_PRIVATE).getBoolean("send_audio", true));
         Compat.startForegroundService(context, i);
     }
 
@@ -47,7 +48,7 @@ public class SenderService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        Sender.begin(this, to, intent.getStringExtra("codec"), p);
+        Sender.begin(this, to, intent.getStringExtra("codec"), p, intent.getBooleanExtra("audio", false));
         Luch.notifyListeners();
         return START_NOT_STICKY;
     }

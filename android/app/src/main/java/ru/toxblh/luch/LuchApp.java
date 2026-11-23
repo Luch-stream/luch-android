@@ -8,6 +8,7 @@ public class LuchApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        AudioFeed.restoreVolume(this); // a phone left muted by a session that was cut short
         Reports.install(this);
     }
 }

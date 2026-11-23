@@ -55,13 +55,31 @@ public class ShareActivity extends Activity {
                     } else {
                         // Android asks what to share (on 14+ one app or the whole screen); the answer starts the capture
                         pending = receivers.get(which);
-                        android.media.projection.MediaProjectionManager m =
-                                (android.media.projection.MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-                        startActivityForResult(m.createScreenCaptureIntent(), REQUEST_CAPTURE);
+                        if (android.os.Build.VERSION.SDK_INT >= 29
+                                && getSharedPreferences("luch", MODE_PRIVATE).getBoolean("send_audio", true)
+                                && checkSelfPermission("android.permission.RECORD_AUDIO") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            requestPermissions(new String[] {"android.permission.RECORD_AUDIO"}, REQUEST_AUDIO);
+                        } else {
+                            askCapture();
+                        }
                     }
                 })
                 .setOnCancelListener(d -> finish())
                 .show();
+    }
+
+    private static final int REQUEST_AUDIO = 79;
+
+    @Override
+    public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (request == REQUEST_AUDIO && pending != null) askCapture();
+    }
+
+    private void askCapture() {
+        android.media.projection.MediaProjectionManager m =
+                (android.media.projection.MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+        startActivityForResult(m.createScreenCaptureIntent(), REQUEST_CAPTURE);
     }
 
     @Override

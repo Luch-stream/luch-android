@@ -557,7 +557,7 @@ final class MirrorSession {
 
     // ---- audio ---------------------------------------------------------------------------------------------
 
-    private static final int AUDIO_BUFFER_STEP_MS = 10, MAX_AUDIO_BUFFER_MS = 100;
+    private static final int AUDIO_BUFFER_STEP_MS = 10, MAX_AUDIO_BUFFER_MS = 200; // 200: a phone on Wi-Fi sends in 20 ms packets that arrive in bursts
 
     private void audioLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);

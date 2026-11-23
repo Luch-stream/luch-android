@@ -79,10 +79,10 @@ final class Sender {
     }
 
     /** Starts showing the screen on {@code to}; {@code codecPref} is "auto", "hevc" or "avc". */
-    static synchronized Session begin(Context context, Luch.Receiver to, String codecPref, MediaProjection projection) {
+    static synchronized Session begin(Context context, Luch.Receiver to, String codecPref, MediaProjection projection, boolean audio) {
         Session old = current;
         if (old != null) old.end("replaced");
-        Session s = new Session(context.getApplicationContext(), to, codecPref, projection);
+        Session s = new Session(context.getApplicationContext(), to, codecPref, projection, audio);
         current = s;
         Thread t = new Thread(s::run, "luch-sender");
         t.start();
@@ -130,12 +130,16 @@ final class Sender {
         private int seq;
         private byte[] config;
         private volatile int readyPort;
+        private final boolean wantAudio;
+        private volatile int audioPort;
+        private AudioFeed feed;
         private volatile int[] pendingSize;
         private int[] currentSize;
         private int dpi;
         private DisplayManager.DisplayListener rotation;
 
-        Session(Context context, Luch.Receiver to, String pref, MediaProjection projection) {
+        Session(Context context, Luch.Receiver to, String pref, MediaProjection projection, boolean audio) {
+            this.wantAudio = audio && AudioFeed.possible(context);
             this.context = context;
             this.to = to;
             this.pref = pref;
@@ -147,12 +151,22 @@ final class Sender {
                 if (ended) return;
                 ended = true;
             }
+            // the projection and the buttons call this on the main thread; the goodbye goes over the network
+            if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                new Thread(() -> finish(why), "luch-sender-end").start();
+            } else {
+                finish(why);
+            }
+        }
+
+        private void finish(String why) {
             Log.i(TAG, "sender ended: " + why);
             try {
                 send(new JSONObject().put("t", "stop"));
                 send(new JSONObject().put("t", "bye"));
             } catch (JSONException | IOException ignored) {
             }
+            if (feed != null) feed.stop();
             close(control);
             if (udp != null) udp.close();
             if (rotation != null) {
@@ -220,13 +234,18 @@ final class Sender {
             String mime = chooseCodec(welcome);
             int[] size = chooseSize();
             DisplayMetrics dm = metrics();
-            send(new JSONObject().put("t", "start").put("mode", "mirror").put("video", new JSONObject()
-                    .put("codec", mime).put("width", size[0]).put("height", size[1]).put("fps", FPS)));
+            JSONObject start = new JSONObject().put("t", "start").put("mode", "mirror").put("video", new JSONObject()
+                    .put("codec", mime).put("width", size[0]).put("height", size[1]).put("fps", FPS));
+            if (wantAudio) start.put("audio", audioSpec());
+            send(start);
             int port = 0;
             while (port == 0) {
                 JSONObject m = new JSONObject(readLine(in));
                 String t = m.optString("t");
-                if ("ready".equals(t)) port = m.getInt("video_port");
+                if ("ready".equals(t)) {
+                    port = m.getInt("video_port");
+                    audioPort = m.optInt("audio_port");
+                }
                 else if ("error".equals(t)) throw new IOException(m.optString("code") + " " + m.optString("detail"));
             }
             control.setSoTimeout(0);
@@ -244,6 +263,11 @@ final class Sender {
             display = projection.createVirtualDisplay("luch", size[0], size[1], dpi,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, input, null, null);
             watchRotation();
+            if (wantAudio && audioPort > 0) {
+                // the sound goes to the receiver and the phone itself goes quiet while it does
+                feed = new AudioFeed(context, projection, udp, peer, audioPort, true);
+                if (!feed.start()) feed = null;
+            }
             Thread reader = new Thread(() -> read(in), "luch-sender-read");
             reader.start();
             pump(peer, port, mime, size);
@@ -253,6 +277,12 @@ final class Sender {
             String l = in.readLine();
             if (l == null) throw new IOException("the receiver closed the connection");
             return l;
+        }
+
+        /** Opus, 48 kHz stereo, 20 ms packets: what the capture and the encoder of {@link AudioFeed} make. */
+        private JSONObject audioSpec() throws JSONException {
+            return new JSONObject().put("codec", "audio/opus").put("rate", 48000).put("channels", 2).put("frame_ms", 20)
+                    .put("sync", false);
         }
 
         /** Auto: what the receiver measured as best, else HEVC when both ends have it, else H.264. */
@@ -345,11 +375,14 @@ final class Sender {
                 old.release();
             }
             readyPort = 0;
-            send(new JSONObject().put("t", "start").put("mode", "mirror").put("video", new JSONObject()
-                    .put("codec", mime).put("width", size[0]).put("height", size[1]).put("fps", FPS)));
+            JSONObject again = new JSONObject().put("t", "start").put("mode", "mirror").put("video", new JSONObject()
+                    .put("codec", mime).put("width", size[0]).put("height", size[1]).put("fps", FPS));
+            if (feed != null) again.put("audio", audioSpec());
+            send(again);
             long until = SystemClock.elapsedRealtime() + 4000;
             while (readyPort == 0 && !ended && SystemClock.elapsedRealtime() < until) SystemClock.sleep(20);
             if (readyPort == 0) throw new IOException("the receiver did not answer the new size");
+            if (feed != null && audioPort > 0) feed.setPort(audioPort); // the new session has new sockets
             Surface input = makeEncoder(mime, size[0], size[1]);
             display.resize(size[0], size[1], dpi);
             display.setSurface(input);
@@ -364,6 +397,7 @@ final class Sender {
                     JSONObject m = new JSONObject(l);
                     switch (m.optString("t")) {
                         case "ready":
+                            audioPort = m.optInt("audio_port");
                             readyPort = m.optInt("video_port");
                             break;
                         case "keyframe":
