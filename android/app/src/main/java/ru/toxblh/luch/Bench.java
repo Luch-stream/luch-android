@@ -41,8 +41,11 @@ final class Bench {
             {"video/x-vnd.on2.vp9", "bench/vp9.ivf"},
             {"video/av01", "bench/av1.ivf"},
     };
-    /** Codecs in order of preference when they decode about as fast: the more senders can encode it, the better. */
-    private static final List<String> ORDER = Arrays.asList("video/avc", "video/hevc", "video/x-vnd.on2.vp9", "video/av01");
+    /** Break ties within the measurement noise in favour of compression efficiency. */
+    private static final String[] COMPRESSION_ORDER = {
+            "video/av01", "video/hevc", "video/x-vnd.on2.vp9", "video/avc"
+    };
+    private static final double TIE_MS = 0.5;
     private static final int W = 1920, H = 1080, FPS = 60;
     /** The first frames include the decoder warming up; they are not counted. */
     private static final int WARMUP = 5;
@@ -57,7 +60,10 @@ final class Bench {
         if (s == null) return null;
         try {
             JSONObject o = new JSONObject(s);
-            return key(context).equals(o.optString("key")) ? o : null;
+            if (!key(context).equals(o.optString("key"))) return null;
+            String best = preferred(o);
+            o.put("prefer", best == null ? JSONObject.NULL : best);
+            return o;
         } catch (JSONException e) {
             return null;
         }
@@ -105,8 +111,6 @@ final class Bench {
         Log.i(LuchService.TAG, "bench started");
         try {
             JSONObject result = new JSONObject();
-            String best = null;
-            double bestMs = Double.MAX_VALUE;
             for (String[] clip : CLIPS) {
                 String mime = clip[0];
                 if (LowLatencyDecoder.hardwareDecoder(mime) == null) continue;
@@ -118,16 +122,9 @@ final class Bench {
                     r = new JSONObject().put("error", String.valueOf(e));
                 }
                 result.put(mime, r);
-                double ms = r.optDouble("ms", Double.NaN);
-                if (!Double.isNaN(ms)) {
-                    // A codec later in the list has to be clearly faster (0.5 ms) to win.
-                    if (best == null || ms < bestMs - 0.5) {
-                        best = mime;
-                        bestMs = ms;
-                    }
-                }
                 Log.i(LuchService.TAG, "bench " + mime + ": " + r);
             }
+            String best = preferred(result);
             result.put("prefer", best == null ? JSONObject.NULL : best);
             result.put("res", W + "x" + H);
             result.put("key", key(context));
@@ -138,6 +135,22 @@ final class Bench {
         } finally {
             running = false;
         }
+    }
+
+    /** Consider only codecs within 0.5 ms of the global minimum; ties cannot accumulate across codecs. */
+    static String preferred(JSONObject results) {
+        double fastest = Double.POSITIVE_INFINITY;
+        for (String mime : COMPRESSION_ORDER) {
+            JSONObject r = results.optJSONObject(mime);
+            double ms = r == null || r.has("error") ? Double.NaN : r.optDouble("ms", Double.NaN);
+            if (!Double.isNaN(ms) && !Double.isInfinite(ms) && ms >= 0) fastest = Math.min(fastest, ms);
+        }
+        for (String mime : COMPRESSION_ORDER) {
+            JSONObject r = results.optJSONObject(mime);
+            double ms = r == null || r.has("error") ? Double.NaN : r.optDouble("ms", Double.NaN);
+            if (!Double.isNaN(ms) && !Double.isInfinite(ms) && ms >= 0 && ms <= fastest + TIE_MS) return mime;
+        }
+        return null;
     }
 
     private static JSONObject measure(Context context, String mime, String asset) throws IOException, JSONException {

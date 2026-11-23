@@ -106,4 +106,5 @@
     <string name="fit_smart">No bars</string>
     <string name="share_photo_label">Luch: photos only</string>
     <string name="sound_android10">Android 10 or newer</string>
+    <string name="hot_badge">🔥 hot — lower the quality</string>
 </resources>

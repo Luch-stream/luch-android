@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package ru.toxblh.luch;
 
+import android.app.UiModeManager;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.hardware.display.DisplayManager;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
@@ -29,6 +31,7 @@ final class Caps {
             out.put("video", video());
             out.put("audio", audio());
             out.put("display", display(context));
+            out.put("device", DeviceState.snapshot(context));
         } catch (JSONException ignored) {
         }
         return out;
@@ -122,6 +125,14 @@ final class Caps {
         return new JSONArray(types);
     }
 
+    /** Tell a TV from a phone or a tablet: the sender adapts its stream to handhelds, not to TVs. */
+    private static String deviceType(Context context) {
+        UiModeManager ui = (UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
+        if (ui != null && ui.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) return "tv";
+        int smallestWidthDp = context.getResources().getConfiguration().smallestScreenWidthDp;
+        return smallestWidthDp >= 600 ? "tablet" : "phone";
+    }
+
     private static JSONObject display(Context context) throws JSONException {
         JSONObject out = new JSONObject();
         Display d = Compat.service(context, DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
@@ -138,6 +149,14 @@ final class Caps {
             modes.put(Math.max(size.x, size.y) + "x" + Math.min(size.x, size.y) + "@" + Math.round(d.getRefreshRate()));
         }
         out.put("modes", modes);
+        // What the client would render into right now: mode with the rotation applied, and the rate.
+        android.graphics.Point size = new android.graphics.Point();
+        d.getRealSize(size); // Already includes rotation, including on Android 5.
+        int rotation = d.getRotation();
+        out.put("current", size.x + "x" + size.y + "@" + Math.round(d.getRefreshRate()));
+        out.put("rotation", rotation * 90);
+        out.put("refresh", Math.round(d.getRefreshRate()));
+        out.put("type", deviceType(context));
         JSONArray hdr = new JSONArray();
         Display.HdrCapabilities h = Build.VERSION.SDK_INT >= 24 ? d.getHdrCapabilities() : null;
         if (h != null && Build.VERSION.SDK_INT >= 24) {

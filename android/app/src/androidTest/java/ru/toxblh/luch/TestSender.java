@@ -114,6 +114,11 @@ final class TestSender {
         JSONObject bench = Bench.cached(InstrumentationRegistry.getInstrumentation().getTargetContext());
         if (bench != null && !bench.optString("prefer").isEmpty()) codec = bench.optString("prefer");
         if (!codec.equals("video/hevc")) codec = "video/avc";   // the two clips the test can send
+        return startCodec(codec, audio);
+    }
+
+    JSONObject startCodec(String mime, JSONObject audio) throws Exception {
+        codec = mime;
         JSONObject start = new JSONObject().put("t", "start").put("mode", "mirror")
                 .put("video", new JSONObject().put("codec", codec).put("width", 1920).put("height", 1080)
                         .put("fps", 30));

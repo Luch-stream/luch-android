@@ -47,6 +47,7 @@ final class LowLatencyDecoder {
         keys.add("priority");
         if (Build.VERSION.SDK_INT >= 30) keys.add(MediaFormat.KEY_LOW_LATENCY);
         keys.add("vdec-lowlatency");   // MediaTek and Amlogic, outside the vendor namespace
+        keys.add("max-num-reorder-frames"); // 0 = no reordering depth on top of "no B-frames"
         List<String> supportedVendor = null;
         if (Build.VERSION.SDK_INT >= 31) {
             try {
@@ -70,6 +71,8 @@ final class LowLatencyDecoder {
                 if (k.equals("priority")) {
                     if (qualcomm || operatingRate) f.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
                     if (!qualcomm) f.setInteger(MediaFormat.KEY_PRIORITY, 0);
+                } else if (k.equals("max-num-reorder-frames")) {
+                    f.setInteger(k, 0);
                 } else {
                     f.setInteger(k, 1);
                 }

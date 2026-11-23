@@ -743,26 +743,41 @@ final class MirrorSession {
         JSONObject s = senderStats;
         double rtt = s == null ? 0 : s.optDouble("rtt_ms", 0);
         double host = s != null && s.has("host_ms") ? s.optDouble("host_ms", hostMs) : hostMs;
+        String res = s != null ? s.optString("res", width + "x" + height) : width + "x" + height;
+        String enc = s != null ? s.optString("encoder", "?") : "?";
+        String codec = videoMime.equals("video/hevc") ? "HEVC" : videoMime.equals("video/avc") ? "H.264" : videoMime;
         StringBuilder b = new StringBuilder();
         b.append(String.format(java.util.Locale.US, "≈ %.0f ms  host + RTT/2 + decode, display not counted\n",
                 host + rtt / 2 + decodeMs));
         b.append(String.format(java.util.Locale.US, "RTT %.1f · host %.1f · decode %.1f ms\n", rtt, host, decodeMs));
+        b.append(String.format(java.util.Locale.US, "stream %d fps %s %s\n", fps, codec, res));
         if (s != null) {
-            b.append(String.format(java.util.Locale.US, "send %d fps %.1f Mbit/s · ", s.optInt("fps"),
-                    s.optDouble("mbps", 0)));
+            b.append(String.format(java.util.Locale.US, "send %d fps %.1f Mbit/s · recv %.1f Mbit/s · shown %d fps\n",
+                    s.optInt("fps"), s.optDouble("mbps", 0), recvMbps, shownFps));
+        } else {
+            b.append(String.format(java.util.Locale.US, "recv %.1f Mbit/s · shown %d fps\n", recvMbps, shownFps));
         }
-        b.append(String.format(java.util.Locale.US, "recv %.1f Mbit/s · shown %d fps · lost %d · dropped %d\n",
-                recvMbps, shownFps, framesLost, framesDropped));
-        String res = s != null ? s.optString("res", width + "x" + height) : width + "x" + height;
-        String enc = s != null ? s.optString("encoder", "?") : "?";
-        b.append(res).append(' ').append(videoMime.equals("video/hevc") ? "HEVC" : "H.264").append(' ')
-                .append(enc).append(" → ").append(decoderName);
+        b.append(String.format(java.util.Locale.US, "surface %s · lost %d · dropped %d\n",
+                MirrorActivity.surfaceInfo(), framesLost, framesDropped));
+        b.append(enc).append(" → ").append(decoderName).append('\n');
+
+        // Device state is reported by the receiver only when it changes; this is the cached view.
+        JSONObject d = DeviceState.snapshot(context);
+        int battery = d.optInt("battery", -1);
+        b.append("battery ").append(battery >= 0 ? battery + "%" : "?");
+        b.append(d.optBoolean("charging", false) ? " charging" : " on battery");
+        if (d.optInt("charge_mah", -1) > 0) b.append(" (").append(d.optInt("charge_mah")).append(" mAh)");
+        b.append(" · thermal ").append(d.optString("thermal", "?"));
+        double headroom = d.optDouble("headroom", -1);
+        if (headroom >= 0) b.append(headroom >= 0.7 ? " 🔥" : " 🌡").append(String.format(java.util.Locale.US, "%.2f", headroom));
+        b.append(d.optBoolean("interactive", true) ? " · screen on" : " · screen off");
         return b.toString();
     }
 
     private static void showScreen(Context context) {
         context.startActivity(new Intent(context, MirrorActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP));
     }
 
     /** Seconds to keep asking for the screen; then the session ends, reason "screen_not_shown". */
@@ -852,7 +867,7 @@ final class MirrorSession {
             publishLive(decodeMs, hostMs, count, bytes * 8 / 1e6);
             if (count == 0) continue;
             try {
-                control.send(new JSONObject().put("t", "stats")
+                JSONObject s = new JSONObject().put("t", "stats")
                         .put("decode_ms", Math.round(sum / (double) count / 100.0) / 10.0)
                         .put("host_ms", hc == 0 ? 0 : Math.round(hs / (double) hc) / 10.0)
                         .put("fps", count)
@@ -861,7 +876,19 @@ final class MirrorSession {
                         .put("shown_seq", shownSeq)
                         .put("decoder", decoderName)
                         .put("audio_latency_ms", audioLatencyMs)
-                        .put("video_hold_ms", videoHoldNs / 1_000_000));
+                        .put("video_hold_ms", videoHoldNs / 1_000_000);
+                // Thermal headroom rises toward 1.0 before severe throttling, so a sender can warn early.
+                double headroom = DeviceState.headroom(context);
+                if (headroom >= 0) s.put("thermal_headroom", Math.round(headroom * 100) / 100.0);
+                MirrorActivity.setHot(DeviceState.isHot(headroom));
+                // Battery, charging and thermal ride along only when they change, never on a timer.
+                JSONObject device = DeviceState.changed();
+                java.util.Iterator<String> keys = device.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    s.put(key, device.get(key));
+                }
+                control.send(s);
             } catch (JSONException ignored) {
             }
         }
@@ -897,6 +924,7 @@ final class MirrorSession {
         Log.i(LuchService.TAG, "mirror ended" + (byReceiver != null ? " here (" + byReceiver + ")" : "") + ": in=" + framesIn + " rendered="
                 + framesRendered + " dropped=" + framesDropped + " lost=" + framesLost + " decoder=" + decoderName);
         broadcast(context, false, false);
+        // Only close the screen when nothing newer took over: on a codec switch the picture stays up.
         if (!replaced) MirrorActivity.sessionEnded();
     }
 

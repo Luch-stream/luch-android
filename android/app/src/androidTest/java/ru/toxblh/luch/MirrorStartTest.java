@@ -127,6 +127,33 @@ public class MirrorStartTest {
         assertEquals("back", stop.optString("reason"));
     }
 
+    @Test
+    public void replacingSessionKeepsTheSameScreenAndShowsFrames() throws Exception {
+        int port = sender.start();
+        waitFor(MirrorActivity::isShown, 10_000, "mirror screen did not open");
+        sender.stream(port, 1_500);
+        java.lang.reflect.Field field = MirrorActivity.class.getDeclaredField("shown");
+        field.setAccessible(true);
+        Object screen = field.get(null);
+        assertNotNull(screen);
+        MirrorSession previous = MirrorSession.current;
+        sender.drain();
+        String other = sender.codec.equals("video/hevc") ? "video/avc" : "video/hevc";
+        JSONObject measured = Bench.cached(context);
+        JSONObject candidate = measured == null ? null : measured.optJSONObject(other);
+        if (candidate == null || !candidate.has("ms") || candidate.has("error")) other = sender.codec;
+        port = sender.startCodec(other, null).getInt("video_port");
+        sender.stream(port, 2_500);
+        assertTrue("new session missing", MirrorSession.current != previous);
+        org.junit.Assert.assertSame("screen recreated during restart", screen, field.get(null));
+        boolean frames = false;
+        for (JSONObject m : sender.drain()) {
+            if ("error".equals(m.optString("t")) || "stop".equals(m.optString("t"))) fail("restart failed: " + m);
+            if ("stats".equals(m.optString("t")) && m.optInt("fps") > 0) frames = true;
+        }
+        assertTrue("no frames after restart", frames);
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------------------
 
     private void sleepScreen() throws IOException {

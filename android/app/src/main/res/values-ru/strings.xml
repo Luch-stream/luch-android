@@ -105,4 +105,5 @@
     <string name="fit_smart">Без полос</string>
     <string name="share_photo_label">Луч: только фото</string>
     <string name="sound_android10">Нужен Android 10+</string>
+    <string name="hot_badge">🔥 горячо — снизьте качество</string>
 </resources>
