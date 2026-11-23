@@ -91,7 +91,8 @@ final class Sender {
 
     static void stop() {
         Session s = current;
-        if (s != null) s.end("stopped");
+        // the end message goes over the network: never on the thread that was clicked
+        if (s != null) new Thread(() -> s.end("stopped"), "luch-sender-stop").start();
     }
 
     static boolean canEncode(String mime) {

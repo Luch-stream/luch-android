@@ -46,6 +46,7 @@ public class StatusActivity extends Activity {
     private LinearLayout content, root, right;
     private boolean wide, tvMode, focused;
     private LinearLayout nav;
+    private QrView qr;
     private TextView whoView;
     private final java.util.List<android.animation.Animator> pulses = new java.util.ArrayList<>();
     private android.window.OnBackInvokedCallback backCb;
@@ -61,7 +62,9 @@ public class StatusActivity extends Activity {
     /** On a TV the text is a fifth larger: it is read from the sofa. */
     @Override
     protected void attachBaseContext(Context base) {
-        if (Ui.isTv(base)) {
+        // not Ui.isTv(base): the context is not attached yet and its system services fail on some Android versions
+        int type = base.getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_TYPE_MASK;
+        if (type == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION) {
             android.content.res.Configuration c = new android.content.res.Configuration(base.getResources().getConfiguration());
             c.fontScale = 1.1f;
             base = base.createConfigurationContext(c);
@@ -94,11 +97,47 @@ public class StatusActivity extends Activity {
         scroll.addView(outer, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(scroll);
+        scroll.post(() -> openLink(getIntent()));
         // A sender's offer to open the screen comes as a notification (Android 13+ asks once).
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {"android.permission.POST_NOTIFICATIONS"}, 1);
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openLink(intent);
+    }
+
+    /** A scanned code: ask, then show this screen on the device the code names. */
+    private void openLink(Intent intent) {
+        android.net.Uri u = intent == null ? null : intent.getData();
+        if (u == null || !"luch".equals(u.getScheme()) || !"connect".equals(u.getHost())) return;
+        setIntent(new Intent(this, StatusActivity.class));
+        String host = u.getQueryParameter("host");
+        String name = u.getQueryParameter("name");
+        int port;
+        try {
+            port = Integer.parseInt(u.getQueryParameter("port"));
+        } catch (RuntimeException e) {
+            return;
+        }
+        if (host == null || host.isEmpty() || Sender.active()) return;
+        if (name == null) name = host;
+        Luch.Receiver known = null;
+        for (Luch.Receiver r : Luch.receivers()) if (host.equals(r.address)) known = r;
+        final Luch.Receiver target = known != null ? known : new Luch.Receiver(host, name, "", host, port, "");
+        tab = 1;
+        render();
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(getString(R.string.link_title, target.name))
+                .setMessage(getString(R.string.link_message, host))
+                .setPositiveButton(R.string.show_btn, (d, w) -> startSend(target))
+                .setNegativeButton(R.string.rename_cancel, null)
+                .show();
     }
 
     @Override
@@ -592,7 +631,10 @@ public class StatusActivity extends Activity {
     private void readyCard(String name, String address, boolean enabled, boolean tv) {
         LinearLayout card = Ui.card(this);
         card.setGravity(Gravity.CENTER_HORIZONTAL);
-        card.setPadding(dp(20), dp(32), dp(20), dp(28));
+        // a phone on its side is only about 400 dp high: the card gets tighter, and the address chips (the code says it all) go
+        boolean compact = wide && !tvMode && getResources().getConfiguration().screenHeightDp < 480;
+        if (compact) card.setPadding(dp(20), dp(12), dp(20), dp(12));
+        else card.setPadding(dp(20), dp(32), dp(20), dp(28));
         FrameLayout halo = new FrameLayout(this);
         int ring = enabled ? Ui.AMBER : Ui.MUTED;
         halo.setBackground(Ui.round(this, enabled ? Ui.HALO_OUTER : Ui.CARD_HIGH, 48, 0));
@@ -603,25 +645,113 @@ public class StatusActivity extends Activity {
         wifi.setColorFilter(ring);
         inner.addView(wifi, new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.CENTER));
         halo.addView(inner, new FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER));
-        card.addView(halo, new LinearLayout.LayoutParams(dp(96), dp(96)));
         if (enabled) pulse(halo);
+        if (wide && enabled && !address.equals("?")) {
+            // the icon on the left, the code coming out of it to the right
+            if (qr == null) qr = new QrView(this);
+            if (qr.getParent() != null) ((ViewGroup) qr.getParent()).removeView(qr);
+            qr.setPlain(false);
+            qr.setText(link(name, address));
+            // the beam starts at the icon's centre
+            FrameLayout row = new FrameLayout(this);
+            FrameLayout slot = new FrameLayout(this); // room for the pulse, which grows past the icon
+            slot.addView(halo, new FrameLayout.LayoutParams(dp(96), dp(96), Gravity.CENTER));
+            int slotSize = compact ? 108 : 124;
+            FrameLayout.LayoutParams qp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(compact ? 92 : 112),
+                    Gravity.START | Gravity.CENTER_VERTICAL);
+            qp.leftMargin = dp(slotSize / 2); // the beam starts at the icon's centre
+            row.addView(qr, qp);
+            row.addView(slot, new FrameLayout.LayoutParams(dp(slotSize), dp(slotSize), Gravity.START | Gravity.CENTER_VERTICAL)); // the icon over the beam
+            card.addView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        } else {
+            card.addView(halo, new LinearLayout.LayoutParams(dp(96), dp(96)));
+        }
         TextView big = Ui.text(this, enabled ? getString(R.string.state_ready_big) : getString(R.string.state_off), 30, Ui.TEXT, true);
         big.setGravity(Gravity.CENTER);
-        big.setPadding(0, dp(18), 0, dp(8));
+        big.setPadding(0, dp(compact ? 2 : 18), 0, dp(compact ? 2 : 8));
+        if (compact) big.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
         card.addView(big);
         TextView sub = Ui.text(this, getString(Ui.kind(this) == 2 ? R.string.visible_as_tv : Ui.kind(this) == 1 ? R.string.visible_as_tablet : R.string.visible_as_phone), 16, Ui.MUTED, false);
         sub.setGravity(Gravity.CENTER);
         card.addView(sub);
         TextView nm = Ui.text(this, name + " Luch", 19, Ui.TEXT, true);
         nm.setGravity(Gravity.CENTER);
-        nm.setPadding(0, dp(4), 0, dp(14));
+        nm.setPadding(0, dp(4), 0, dp(compact ? 0 : 14));
         card.addView(nm);
+        if (compact) {
+            content.addView(card, Ui.below(this, 12));
+            return;
+        }
         LinearLayout chips = new LinearLayout(this);
         chips.setGravity(Gravity.CENTER);
         chips.addView(chip(address));
         chips.addView(chip(networkKind() + getString(R.string.port_n, Luch.PORT)));
         card.addView(chips);
-        content.addView(card, Ui.below(this, 20));
+        if (wide || !enabled || address.equals("?")) {
+            content.addView(card, Ui.below(this, 20));
+            return;
+        }
+        // a phone held upright: a tap turns the card over, the code is on its back
+        TextView tap = Ui.text(this, getString(R.string.qr_tap), 13, Ui.MUTED, false);
+        tap.setGravity(Gravity.CENTER);
+        tap.setPadding(0, dp(14), 0, 0);
+        card.addView(tap);
+        LinearLayout back = qrBack(name, address);
+        FrameLayout holder = new FrameLayout(this);
+        float dist = getResources().getDisplayMetrics().density * 8000;
+        card.setCameraDistance(dist);
+        back.setCameraDistance(dist);
+        holder.addView(card, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        holder.addView(back, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        (flipped ? card : back).setVisibility(View.INVISIBLE);
+        card.setOnClickListener(v -> flip(card, back));
+        back.setOnClickListener(v -> flip(card, back));
+        content.addView(holder, Ui.below(this, 20));
+    }
+
+    private boolean flipped;
+
+    private LinearLayout qrBack(String name, String address) {
+        LinearLayout b = Ui.card(this);
+        b.setGravity(Gravity.CENTER);
+        b.setPadding(dp(20), dp(20), dp(20), dp(20));
+        if (qr == null) qr = new QrView(this);
+        if (qr.getParent() != null) ((ViewGroup) qr.getParent()).removeView(qr);
+        qr.setPlain(true);
+        qr.setText(link(name, address));
+        b.addView(qr, new LinearLayout.LayoutParams(dp(210), dp(210)));
+        TextView caption = Ui.text(this, getString(R.string.qr_scan), 16, Ui.MUTED, false);
+        caption.setGravity(Gravity.CENTER);
+        caption.setPadding(0, dp(14), 0, dp(4));
+        b.addView(caption);
+        TextView nm = Ui.text(this, name + " Luch", 18, Ui.TEXT, true);
+        nm.setGravity(Gravity.CENTER);
+        b.addView(nm);
+        TextView hint = Ui.text(this, getString(R.string.qr_back), 13, Ui.MUTED, false);
+        hint.setGravity(Gravity.CENTER);
+        hint.setPadding(0, dp(10), 0, 0);
+        b.addView(hint);
+        return b;
+    }
+
+    /** Turns the card over: the face turns edge-on, the other face comes round. */
+    private void flip(View front, View back) {
+        final View from = flipped ? back : front, to = flipped ? front : back;
+        from.animate().rotationY(90f).setDuration(190).withEndAction(() -> {
+            from.setVisibility(View.INVISIBLE);
+            from.setRotationY(0f);
+            to.setRotationY(-90f);
+            to.setVisibility(View.VISIBLE);
+            flipped = !flipped;
+            if (flipped && qr != null) qr.replay();
+            to.animate().rotationY(0f).setDuration(190).start();
+        }).start();
+    }
+
+    /** What the code says: a phone with Luch opens it, picks this device and starts showing its screen here. */
+    private String link(String name, String address) { // name is not used any more, see below
+        // short on purpose: fewer, bigger dots scan better; the name comes from the sender's own list when it knows the device
+        return "luch://connect?host=" + address + "&port=" + Luch.PORT;
     }
 
     private TextView chip(String s) {

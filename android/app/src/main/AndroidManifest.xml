@@ -29,7 +29,15 @@
 
         <activity
             android:name=".StatusActivity"
+            android:launchMode="singleTop"
             android:exported="true">
+            <!-- A scanned QR code of a receiver. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="luch" android:host="connect" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

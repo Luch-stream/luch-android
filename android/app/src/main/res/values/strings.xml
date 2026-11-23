@@ -89,4 +89,9 @@
     <string name="rename_save">Save</string>
     <string name="rename_cancel">Cancel</string>
     <string name="rename_reset">Reset</string>
+    <string name="link_title">Show the screen on “%1$s”?</string>
+    <string name="link_message">Address %1$s. Android will ask once more before it starts.</string>
+    <string name="qr_tap">Tap to show the QR code</string>
+    <string name="qr_scan">Scan with the camera of another device</string>
+    <string name="qr_back">Tap to turn back</string>
 </resources>

@@ -88,4 +88,9 @@
     <string name="rename_save">Сохранить</string>
     <string name="rename_cancel">Отмена</string>
     <string name="rename_reset">Сбросить</string>
+    <string name="link_title">Показать экран на «%1$s»?</string>
+    <string name="link_message">Адрес %1$s. Android спросит ещё раз перед началом.</string>
+    <string name="qr_tap">Нажмите, чтобы показать QR-код</string>
+    <string name="qr_scan">Наведите камеру другого устройства</string>
+    <string name="qr_back">Нажмите, чтобы вернуться</string>
 </resources>
