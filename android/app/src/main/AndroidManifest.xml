@@ -58,6 +58,62 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
 
+        <!-- "Transmit with Luch" in the share sheet: the screen goes to a receiver, one app if the person picks one. -->
+        <activity
+            android:name=".ShareActivity"
+            android:label="@string/share_label"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- "Show photos with Luch": the chosen photos go to a receiver full screen. -->
+        <activity-alias
+            android:name=".SharePhotoActivity"
+            android:targetActivity=".ShareActivity"
+            android:label="@string/share_photo_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- Offers the shared photos to the receiver while it shows them. -->
+        <service
+            android:name=".PhotoService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Offers photos shared from another app to a receiver on the local network while it shows them." />
+        </service>
+
+        <!-- Photos from a sender, full screen. -->
+        <activity
+            android:name=".PhotoActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
         <!-- Always on, like an AirPlay or Cast receiver: announces the TV and answers senders. -->
         <!-- Exported so "adb shell am start-foreground-service" can start it; starting it only turns the receiver on. -->
         <service

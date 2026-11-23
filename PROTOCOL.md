@@ -100,6 +100,25 @@ first and again with every video IDR.
 later frame arrives; after a loss everything is dropped until an IDR, which is asked for once a frame completes
 again, and again after about RTT + 100 ms if none comes. Of the frames decoded at once only the newest is drawn.
 
+## 4a. Photos
+
+A sender shows pictures full screen, one at a time, in a list the person can go through on the remote. The receiver lists
+`"photo"` in `modes` (welcome) when it can; the sender says `"photo"` in `want`.
+
+```
+sender   → {"t":"photo","index":0,"items":[{"url":"http://<sender>:<port>/<token>/0","mime":"image/jpeg","name":"IMG_1.jpg"}, ...]}
+receiver → {"t":"photo_ready"}            or {"t":"error","code":"photo_failed"|"busy","detail":"..."}
+either   → {"t":"stop"}                   receiver adds "by":"receiver","reason":"back" when the person leaves
+```
+
+- The files do not go over the control channel (a line is at most 64 KiB). Each `url` is a plain HTTP GET the sender serves
+  for the time of the session, with a random token in the path and only to the receiver's address. At most 200 items.
+- The receiver must refuse a list whose links point anywhere but the address the control connection came from, and fetch
+  with a plain `HTTP/1.0 GET` (Android refuses cleartext through its own HTTP stack; the link is on the local network).
+- A new `photo` replaces the list. The receiver shows each picture fitted on black, rotated by its EXIF orientation,
+  down-scaled to what the screen can use; left and right on the remote (or a swipe) go to the neighbour, Back leaves.
+- Not while a mirroring session is running: `{"t":"error","code":"busy","for":"photo"}`.
+
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 
 `welcome` also carries:
@@ -153,5 +172,5 @@ to file it as an issue. Sending reports to a server must stay opt-in on the send
 ## 7. Later versions (reserved)
 
 Reed-Solomon FEC shards (the header already has room); pairing with a code shown on the TV; `{"t":"media","url":...}`
-with `play/pause/seek/rate/track/sub` and `state` reports, the TV playing the original file; `{"t":"photo",...}`;
+with `play/pause/seek/rate/track/sub` and `state` reports, the TV playing the original file; `{"t":"photo",...}` (done, section 4a: a sender-served link, no inline data);
 `{"t":"key","code":...}` from the TV remote back to the sender (next slide, pause).

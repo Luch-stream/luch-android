@@ -94,4 +94,15 @@
     <string name="qr_tap">Tap to show the QR code</string>
     <string name="qr_scan">Scan with the camera of another device</string>
     <string name="qr_back">Tap to turn back</string>
+    <string name="photo_failed">Could not load the photo</string>
+    <string name="share_label">Transmit with Luch</string>
+    <string name="share_pick">Where to show</string>
+    <string name="share_none">No Luch receivers in sight. Start Luch on the TV.</string>
+    <string name="photo_unsupported">This receiver cannot show photos yet</string>
+    <string name="photo_send_failed">Could not show the photos: %s</string>
+    <string name="photo_notification">Photos on “%s”</string>
+    <string name="photo_stop">Tap to stop</string>
+    <string name="photo_channel">Photo sharing</string>
+    <string name="fit_smart">No bars</string>
+    <string name="share_photo_label">Show photos with Luch</string>
 </resources>

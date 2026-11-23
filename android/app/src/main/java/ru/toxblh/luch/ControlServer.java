@@ -101,6 +101,7 @@ final class ControlServer {
     private void serve(Socket s) {
         String peerId = null;
         String peerName = null;
+        String peerApp = "";
         String address = s.getInetAddress().getHostAddress();
         MirrorSession.Control control = null;
         try {
@@ -142,6 +143,7 @@ final class ControlServer {
                     case "hello":
                         peerId = msg.optString("id", address);
                         peerName = msg.optString("name", address);
+                        peerApp = msg.optString("app");
                         send(out, welcome());
                         SENDERS.add(control);
                         if (wants(msg, "reports")) {
@@ -185,6 +187,7 @@ final class ControlServer {
                             break;
                         }
                         try {
+                            msg.put("_app", peerApp);
                             int[] ports = MirrorSession.start(context, control, msg);
                             send(out, new JSONObject().put("t", "ready")
                                     .put("video_port", ports[0]).put("audio_port", ports[1]));
@@ -194,8 +197,22 @@ final class ControlServer {
                                     .put("detail", String.valueOf(e)));
                         }
                         break;
+                    case "photo":
+                        if (Sender.active() || MirrorSession.current != null) {
+                            send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "photo"));
+                            break;
+                        }
+                        try {
+                            PhotoSession.open(context, control, address, msg);
+                            send(out, new JSONObject().put("t", "photo_ready"));
+                        } catch (IOException | RuntimeException e) {
+                            send(out, new JSONObject().put("t", "error").put("code", "photo_failed")
+                                    .put("detail", String.valueOf(e.getMessage())));
+                        }
+                        break;
                     case "stop":
                         MirrorSession.stopFromSender(control);
+                        PhotoSession.closeFrom(control);
                         break;
                     case "bench": {
                         // Takes the hardware decoders for a few seconds: not while mirroring or already measuring.
@@ -228,6 +245,7 @@ final class ControlServer {
             if (control != null) {
                 SENDERS.remove(control);
                 MirrorSession.stopFromSender(control);
+                PhotoSession.closeFrom(control);
             }
             if (peerId != null) Luch.disconnected(peerId);
         }
@@ -251,7 +269,7 @@ final class ControlServer {
                 .put("model", Luch.model())
                 .put("decoders", new JSONArray(Luch.decoders()))
                 .put("max", Luch.maxSize())
-                .put("modes", new JSONArray().put("mirror"))
+                .put("modes", new JSONArray().put("mirror").put("photo"))
                 // Android version, and what works worse on it than on 8.0+ (PROTOCOL.md, section 5).
                 .put("sdk", android.os.Build.VERSION.SDK_INT)
                 .put("limits", Caps.limits())

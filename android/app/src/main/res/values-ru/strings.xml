@@ -93,4 +93,15 @@
     <string name="qr_tap">Нажмите, чтобы показать QR-код</string>
     <string name="qr_scan">Наведите камеру другого устройства</string>
     <string name="qr_back">Нажмите, чтобы вернуться</string>
+    <string name="photo_failed">Не удалось загрузить фото</string>
+    <string name="share_label">Транслировать Лучом</string>
+    <string name="share_pick">Куда показать</string>
+    <string name="share_none">Получателей Луча не видно. Включите Луч на телевизоре.</string>
+    <string name="photo_unsupported">Этот получатель пока не показывает фото</string>
+    <string name="photo_send_failed">Не удалось показать фото: %s</string>
+    <string name="photo_notification">Фото на «%s»</string>
+    <string name="photo_stop">Нажмите, чтобы остановить</string>
+    <string name="photo_channel">Показ фото</string>
+    <string name="fit_smart">Без полос</string>
+    <string name="share_photo_label">Показать фото Лучом</string>
 </resources>
