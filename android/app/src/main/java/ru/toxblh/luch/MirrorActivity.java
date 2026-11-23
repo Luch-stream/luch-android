@@ -104,6 +104,8 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             h = Math.round(s.videoHeight() * k);
         }
         FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) video.getLayoutParams();
+        android.util.Log.i(LuchService.TAG, "picture " + w + "x" + h + " of " + pw + "x" + ph + ", video " + s.videoWidth() + "x"
+                + s.videoHeight() + ", mode " + fitMode);
         if (p.width != w || p.height != h) {
             p.width = w;
             p.height = h;

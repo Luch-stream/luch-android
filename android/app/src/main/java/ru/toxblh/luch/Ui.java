@@ -41,6 +41,12 @@ final class Ui {
         return m != null && m.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
     }
 
+    /** 0 phone, 1 tablet, 2 TV (a projector with Google TV reports itself as a TV too). */
+    static int kind(Context c) {
+        if (isTv(c)) return 2;
+        return c.getResources().getConfiguration().smallestScreenWidthDp >= 600 ? 1 : 0;
+    }
+
     static String clock(long ms) {
         long s = ms / 1000;
         return String.format(Locale.US, "%02d:%02d", s / 60, s % 60);

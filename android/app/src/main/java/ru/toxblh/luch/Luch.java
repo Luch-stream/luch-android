@@ -104,6 +104,28 @@ final class Luch {
 
     /** The name people gave the TV in its settings, else the model. */
     static String name(Context context) {
+        String own = customName(context);
+        if (!own.isEmpty()) return own;
+        return systemName(context);
+    }
+
+    /** What the person typed in the app, empty when nothing. */
+    static String customName(Context context) {
+        return context.getSharedPreferences("luch", Context.MODE_PRIVATE).getString("custom_name", "").trim();
+    }
+
+    /** Saves the name and makes the receiver announce itself under it. */
+    static void setCustomName(Context context, String name) {
+        String clean = name == null ? "" : name.trim();
+        if (clean.length() > 30) clean = clean.substring(0, 30);
+        context.getSharedPreferences("luch", Context.MODE_PRIVATE).edit().putString("custom_name", clean).apply();
+        if (enabled(context)) {
+            context.stopService(new android.content.Intent(context, LuchService.class));
+            LuchService.start(context);
+        }
+    }
+
+    static String systemName(Context context) {
         String name = Settings.Global.getString(context.getContentResolver(), Settings.Global.DEVICE_NAME);
         return name == null || name.trim().isEmpty() ? Build.MODEL : name.trim();
     }

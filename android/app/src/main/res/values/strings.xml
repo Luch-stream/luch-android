@@ -81,4 +81,12 @@
     <string name="fit_fit">Fit</string>
     <string name="fit_fill">Fill</string>
     <string name="fit_stretch">Stretch</string>
+    <string name="this_tablet">This tablet</string>
+    <string name="visible_as_tablet">The tablet is visible on the network as</string>
+    <string name="send_title_tv">Show this TV\'s screen</string>
+    <string name="rename_title">Name on the network</string>
+    <string name="rename_message">Other devices see it as “name · Luch”. Empty means the device name from system settings.</string>
+    <string name="rename_save">Save</string>
+    <string name="rename_cancel">Cancel</string>
+    <string name="rename_reset">Reset</string>
 </resources>
