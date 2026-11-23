@@ -19,7 +19,7 @@ Luch («луч») превращает Android TV, приставку Google TV 
 
 ## Установка
 
-Скачайте APK из [Releases](https://github.com/Toxblh/luch-android/releases) (или соберите, см. ниже) и поставьте
+Скачайте APK из [Releases](https://github.com/Luch-stream/luch-android/releases) (или соберите, см. ниже) и поставьте
 через adb:
 
 ```sh

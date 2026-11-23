@@ -20,8 +20,8 @@ android {
         minSdk 21
         targetSdk 34
         // -PluchVersionCode / -PluchVersionName: only for trying an update on an emulator (docs/updates.md).
-        versionCode Integer.parseInt(String.valueOf(project.findProperty('luchVersionCode') ?: '3'))
-        versionName String.valueOf(project.findProperty('luchVersionName') ?: '0.3')
+        versionCode Integer.parseInt(String.valueOf(project.findProperty('luchVersionCode') ?: '4'))
+        versionName String.valueOf(project.findProperty('luchVersionName') ?: '0.4')
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
@@ -34,7 +34,7 @@ android {
     defaultConfig {
         buildConfigField 'String', 'UPDATE_FEEDS', '"' + String.valueOf(project.findProperty('luchUpdateFeeds') ?:
                 'https://altlinux.space/api/v1/repos/Luch/luch-android/releases/latest|' +
-                'https://api.github.com/repos/Toxblh/luch-android/releases/latest') + '"'
+                'https://api.github.com/repos/Luch-stream/luch-android/releases/latest') + '"'
     }
 
     // Where the APK is published decides whether it may update itself:

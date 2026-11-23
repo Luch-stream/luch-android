@@ -19,7 +19,7 @@ to, the way AirPlay and Chromecast work, but open and built for the lowest delay
 
 ## Install
 
-Download the APK from [Releases](https://github.com/Toxblh/luch-android/releases) (or build it, below) and install
+Download the APK from [Releases](https://github.com/Luch-stream/luch-android/releases) (or build it, below) and install
 it with adb:
 
 ```sh
