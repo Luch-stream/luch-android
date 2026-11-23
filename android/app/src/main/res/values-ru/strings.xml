@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="notification_text">Готов к приёму</string>
+    <string name="offer_channel">Входящий показ экрана</string>
+    <string name="offer_title">Луч: %s показывает экран</string>
+    <string name="offer_text">Нажмите, чтобы открыть</string>
+    <string name="offer_someone">отправитель</string>
     <string name="toast_connected">Luch: подключился %s</string>
     <string name="status_name">Имя: %s</string>
     <string name="status_address">Адрес: %1$s, порт %2$d</string>
