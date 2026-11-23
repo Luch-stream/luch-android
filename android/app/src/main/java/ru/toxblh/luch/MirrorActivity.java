@@ -2,6 +2,8 @@
 package ru.toxblh.luch;
 
 import android.app.Activity;
+import android.content.Intent;
+import android.view.ViewGroup;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -26,6 +28,13 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     private WifiManager.WifiLock wifiLock;
     private TextView stats;
     private boolean statsOn;
+    private SurfaceView video;
+    private FrameLayout rootView;
+    /** How the picture meets the screen: 0 fit with bars, 1 fill and crop the edges, 2 stretch. */
+    private int fitMode;
+    /** A tap on the picture (a touch screen) brings up from whom it comes and the figures; another tap hides it. */
+    private android.widget.ScrollView panel;
+    private final Luch.Listener panelListener = () -> runOnUiThread(this::refreshPanel);
 
     @Override
     protected void onCreate(Bundle state) {
@@ -41,26 +50,17 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         }
         // Ask the display for its game mode: the least picture processing, the least delay (Moonlight does the same).
         if (Build.VERSION.SDK_INT >= 30) getWindow().setPreferMinimalPostProcessing(true);
+        fitMode = prefs().getInt("fit_mode", 0);
         SurfaceView view = new SurfaceView(this);
+        video = view;
         view.getHolder().addCallback(this);
         FrameLayout root = new FrameLayout(this);
+        rootView = root;
         root.setBackgroundColor(0xFF000000);   // the bars beside a picture that does not fill the screen
         root.addView(view, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER));
         // The picture keeps its proportions on any screen (a phone is not 16:9): fit it in the window, bars on the sides.
-        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            MirrorSession s = MirrorSession.current;
-            int pw = r - l, ph = b - t;
-            if (s == null || pw <= 0 || ph <= 0 || s.videoWidth() <= 0 || s.videoHeight() <= 0) return;
-            float k = Math.min(pw / (float) s.videoWidth(), ph / (float) s.videoHeight());
-            int w = Math.round(s.videoWidth() * k), h = Math.round(s.videoHeight() * k);
-            FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) view.getLayoutParams();
-            if (p.width != w || p.height != h) {
-                p.width = w;
-                p.height = h;
-                view.post(view::requestLayout);
-            }
-        });
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fit(r - l, b - t));
         // Moonlight-style statistics in the corner, toggled with OK (or Info / Menu) and remembered.
         stats = new TextView(this);
         stats.setTypeface(Typeface.MONOSPACE);
@@ -74,6 +74,12 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
                 FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START);
         lp.setMargins(pad * 2, pad * 2, 0, 0);
         root.addView(stats, lp);
+        panel = new android.widget.ScrollView(this);
+        panel.setBackgroundColor(0xF2121318);
+        panel.setVisibility(View.GONE);
+        panel.setOnClickListener(v -> togglePanel());   // a tap on the panel itself returns to the picture
+        root.addView(panel, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
         setContentView(root);
         statsOn = prefs().getBoolean("stats", false);
         stats.setVisibility(statsOn ? View.VISIBLE : View.GONE);
@@ -81,6 +87,47 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         shown = this;
         if (MirrorSession.current == null) finish();
+    }
+
+    /** The picture keeps its proportions on any screen: fit it in the window, bars on the sides. */
+    private void fit(int pw, int ph) {
+        MirrorSession s = MirrorSession.current;
+        if (s == null || pw <= 0 || ph <= 0 || s.videoWidth() <= 0 || s.videoHeight() <= 0) return;
+        float kw = pw / (float) s.videoWidth(), kh = ph / (float) s.videoHeight();
+        int w, h;
+        if (fitMode == 2) {
+            w = pw;
+            h = ph;
+        } else {
+            float k = fitMode == 1 ? Math.max(kw, kh) : Math.min(kw, kh);
+            w = Math.round(s.videoWidth() * k);
+            h = Math.round(s.videoHeight() * k);
+        }
+        FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) video.getLayoutParams();
+        if (p.width != w || p.height != h) {
+            p.width = w;
+            p.height = h;
+            video.post(video::requestLayout);
+        }
+    }
+
+    private void setFitMode(int mode) {
+        fitMode = mode;
+        prefs().edit().putInt("fit_mode", mode).apply();
+        fit(rootView.getWidth(), rootView.getHeight());
+        refreshPanel();
+    }
+
+    /** The sender started again with another size (it turned): the screen stays, the new session draws on it. */
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        MirrorSession s = MirrorSession.current;
+        if (s == null) return;
+        fit(rootView.getWidth(), rootView.getHeight());
+        Surface surface = video.getHolder().getSurface();
+        if (surface != null && surface.isValid()) s.setSurface(surface);
     }
 
     @Override
@@ -105,6 +152,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onStart() {
         super.onStart();
+        Luch.addListener(panelListener);
         stopped = false;
         handler.removeCallbacks(closeIfStillStopped);
         MirrorSession s = MirrorSession.current;
@@ -119,6 +167,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
      */
     @Override
     protected void onStop() {
+        Luch.removeListener(panelListener);
         android.util.Log.i(LuchService.TAG, "mirror screen stopped, finishing=" + isFinishing());
         stopped = true;
         handler.removeCallbacks(closeIfStillStopped);
@@ -162,10 +211,40 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     public boolean onTouchEvent(android.view.MotionEvent e) {
         if (e.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
-            toggleStats();
+            // The black statistics in the corner go first, the next tap brings up the panel.
+            if (statsOn) toggleStats();
+            else togglePanel();
             return true;
         }
         return super.onTouchEvent(e);
+    }
+
+    private void togglePanel() {
+        boolean show = panel.getVisibility() != View.VISIBLE;
+        panel.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) refreshPanel();
+    }
+
+    private void refreshPanel() {
+        if (panel.getVisibility() != View.VISIBLE) return;
+        MirrorSession s = MirrorSession.current;
+        MirrorSession.Live live = s == null ? null : s.live();
+        android.widget.LinearLayout col = new android.widget.LinearLayout(this);
+        col.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int pad = Ui.dp(this, 16);
+        col.setPadding(pad, pad, pad, pad);
+        if (live != null) {
+            java.util.List<Luch.Peer> peers = Luch.connected();
+            col.addView(Ui.flowCard(this, peers.isEmpty() ? null : peers.get(0), live, Ui.isTv(this), Luch.name(this)));
+            col.addView(Ui.stats(this, live), Ui.below(this, 10));
+        }
+        col.addView(Ui.chips(this, new String[] {getString(R.string.fit_fit), getString(R.string.fit_fill),
+                getString(R.string.fit_stretch)}, fitMode, this::setFitMode), Ui.below(this, 12));
+        android.widget.Button stop = Ui.button(this, getString(R.string.action_stop), true, v -> onBackPressed());
+        col.addView(stop, new android.widget.LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 52)));
+        ((android.widget.LinearLayout.LayoutParams) stop.getLayoutParams()).topMargin = Ui.dp(this, 10);
+        panel.removeAllViews();
+        panel.addView(col);
     }
 
     private void toggleStats() {
@@ -176,6 +255,12 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+            setFitMode((fitMode + 1) % 3);
+            android.widget.Toast.makeText(this, new String[] {getString(R.string.fit_fit), getString(R.string.fit_fill),
+                    getString(R.string.fit_stretch)}[fitMode], android.widget.Toast.LENGTH_SHORT).show();
+            return true;
+        }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
                 || keyCode == KeyEvent.KEYCODE_INFO || keyCode == KeyEvent.KEYCODE_MENU) {
             toggleStats();

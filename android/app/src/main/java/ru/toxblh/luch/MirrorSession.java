@@ -84,6 +84,8 @@ final class MirrorSession {
     private volatile long videoHoldNs;
     private DatagramSocket videoSocket, audioSocket;
     private volatile boolean ended;
+    /** Ended because the same sender started again (it turned, or changed the size): the screen is not closed. */
+    private volatile boolean replaced;
     private volatile Surface surface;
     /** Stand-in output while the screen is not shown, so the session outlives a visit to the launcher (Android 8+). */
     private SurfaceTexture standInTexture;
@@ -125,6 +127,47 @@ final class MirrorSession {
     /** The sender's own figures, once a second ({"t":"sender_stats",...}); null until the first. */
     private volatile JSONObject senderStats;
 
+    /** What the status screen shows while a picture is being received. */
+    static final class Live {
+        final String codec, res, decoder;
+        final int shownFps, lost, dropped;
+        final double recvMbps, latencyMs, rttMs;
+        final long sinceMs;
+
+        Live(String codec, String res, String decoder, int shownFps, int lost, int dropped, double recvMbps, double latencyMs,
+                double rttMs, long sinceMs) {
+            this.codec = codec;
+            this.res = res;
+            this.decoder = decoder;
+            this.shownFps = shownFps;
+            this.lost = lost;
+            this.dropped = dropped;
+            this.recvMbps = recvMbps;
+            this.latencyMs = latencyMs;
+            this.rttMs = rttMs;
+            this.sinceMs = sinceMs;
+        }
+    }
+
+    private volatile Live live;
+    private final long startedAt = SystemClock.elapsedRealtime();
+
+    /** The figures of the last second, null before the first one and once the session has ended. */
+    Live live() {
+        return ended ? null : live;
+    }
+
+    private void publishLive(double decodeMs, double hostMs, long shownFps, double recvMbps) {
+        JSONObject sd = senderStats;
+        double rtt = sd == null ? 0 : sd.optDouble("rtt_ms", 0);
+        double host = sd != null && sd.has("host_ms") ? sd.optDouble("host_ms", hostMs) : hostMs;
+        String res = sd != null ? sd.optString("res", width + "x" + height) : width + "x" + height;
+        live = new Live(videoMime.equals("video/hevc") ? "HEVC" : "H.264", res.replace('x', '\u00d7'), decoderName,
+                (int) shownFps, framesLost, framesDropped, recvMbps, host + rtt / 2 + decodeMs, rtt,
+                SystemClock.elapsedRealtime() - startedAt);
+        Luch.notifyListeners();
+    }
+
     private MirrorSession(Context context, Control control, JSONObject start) {
         this.context = context.getApplicationContext();
         this.control = control;
@@ -144,7 +187,10 @@ final class MirrorSession {
     /** Opens both sockets and the screen; returns {video port, audio port}. */
     static synchronized int[] start(Context context, Control control, JSONObject msg) throws IOException {
         MirrorSession old = current;
-        if (old != null) old.end(null);
+        if (old != null) {
+            old.replaced = true;   // the sender went on with another size: the screen stays up for the new session
+            old.end(null);
+        }
         MirrorSession s = new MirrorSession(context, control, msg);
         s.videoSocket = openSocket();
         s.audioSocket = openSocket();
@@ -731,6 +777,7 @@ final class MirrorSession {
      * person's own action. Returns false when notifications are not allowed (Android 13+ asks once, in StatusActivity).
      */
     private boolean postOffer() {
+        if (!Luch.offerNotification(context)) return false;
         if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission("android.permission.POST_NOTIFICATIONS")
                 != PackageManager.PERMISSION_GRANTED) return false;
         NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -798,6 +845,7 @@ final class MirrorSession {
             double decodeMs = count == 0 ? 0 : sum / (double) count / 1000.0;
             double hostMs = hc == 0 ? 0 : hs / (double) hc / 10.0;
             MirrorActivity.showStats(overlay(decodeMs, hostMs, count, bytes * 8 / 1e6));
+            publishLive(decodeMs, hostMs, count, bytes * 8 / 1e6);
             if (count == 0) continue;
             try {
                 control.send(new JSONObject().put("t", "stats")
@@ -828,6 +876,7 @@ final class MirrorSession {
             } catch (JSONException ignored) {
             }
         }
+        Luch.notifyListeners();
         if (videoSocket != null) videoSocket.close();
         if (audioSocket != null) audioSocket.close();
         MediaCodec d = decoder;
@@ -844,7 +893,7 @@ final class MirrorSession {
         Log.i(LuchService.TAG, "mirror ended" + (byReceiver != null ? " here (" + byReceiver + ")" : "") + ": in=" + framesIn + " rendered="
                 + framesRendered + " dropped=" + framesDropped + " lost=" + framesLost + " decoder=" + decoderName);
         broadcast(context, false, false);
-        MirrorActivity.sessionEnded();
+        if (!replaced) MirrorActivity.sessionEnded();
     }
 
     /** Keeps a report of a failure the person will have noticed, with what the session was doing (Reports). */
