@@ -150,7 +150,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     private void startAnalysis() {
         if (analyzing || Build.VERSION.SDK_INT < 26) return;
         analyzing = true;
-        cropHandler.postDelayed(this::analyze, 400);
+        cropHandler.postDelayed(this::analyze, 90); // ~10 looks a second: a swiped-in photo is known within a quarter of a second
     }
 
     private void analyze() {
@@ -174,10 +174,23 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         }
     }
 
+    private int[] lastPixels;
+
     private void onFrame(android.graphics.Bitmap bmp, int vw, int vh) {
         int w = bmp.getWidth(), h = bmp.getHeight();
         int[] px = new int[w * h];
         bmp.getPixels(px, 0, w, 0, 0, w, h);
+        // How much the picture moved since the last look: a swipe between two photos moves all of it, a toolbar a little.
+        long diff = 0;
+        if (lastPixels != null && lastPixels.length == px.length) {
+            for (int i = 0; i < px.length; i += 3) {
+                int a = px[i], b = lastPixels[i];
+                int da = (((a >> 16) & 0xFF) + ((a >> 8) & 0xFF) + (a & 0xFF)) - (((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF));
+                diff += Math.abs(da) / 3;
+            }
+            diff /= Math.max(1, px.length / 3);
+        }
+        lastPixels = px;
         final int dark = 28;
         int top = -1, bottom = -1, left = w, right = -1;
         for (int y = 0; y < h; y++) {
@@ -208,7 +221,10 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             want = new float[] {0, 0, 0, 0}; // no bars worth cutting
         }
         // the same answer twice in a row before the picture moves, so a bar or a toolbar coming and going does not make it breathe
-        if (cropSeen != null && near(cropSeen, want, vw * .03f, vh * .03f)) cropSeenCount++;
+        // The same bars twice running and the picture still: a swipe is under way while it moves and its edges slide, so
+        // neither the half-way state nor the slow end of the slide is taken; the one that stays is.
+        boolean still = diff < 6 || (cropSeen != null && near(cropSeen, want, vw * .004f, vh * .004f));
+        if (cropSeen != null && still && near(cropSeen, want, vw * .01f, vh * .01f)) cropSeenCount++;
         else {
             cropSeen = want;
             cropSeenCount = 1;
@@ -224,6 +240,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     private void animateCrop(float[] to) {
+        android.util.Log.i(LuchService.TAG, "crop apply " + java.util.Arrays.toString(to));
         MirrorSession s = MirrorSession.current;
         if (s == null) return;
         final float[] from = cropNow.clone();
@@ -236,7 +253,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         }
         if (cropAnim != null) cropAnim.cancel();
         cropAnim = android.animation.ValueAnimator.ofFloat(0f, 1f);
-        cropAnim.setDuration(380);
+        cropAnim.setDuration(170);
         cropAnim.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
         cropAnim.addUpdateListener(a -> {
             float t = (float) a.getAnimatedValue();
