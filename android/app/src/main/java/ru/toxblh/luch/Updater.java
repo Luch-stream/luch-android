@@ -30,7 +30,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 
 /**
- * Self-update from GitHub releases, only in the "github" build (BuildConfig.SELF_UPDATE): F-Droid and Play update the
+ * Self-update from the releases on ALS (Forgejo) or GitHub, only in the "github" build (BuildConfig.SELF_UPDATE): F-Droid and Play update the
  * app themselves and do not allow an app to do it. docs/updates.md has the whole story.
  *
  * A release is taken only if it is final (not a draft or a pre-release), newer than this app, has the signed
@@ -38,19 +38,25 @@ import java.util.Arrays;
  * the running app. The system installer checks the key again.
  */
 final class Updater {
-    static final String LATEST = "https://api.github.com/repos/Toxblh/luch-android/releases/latest";
+    /** Release feeds in order, separated by "|": ALS (Forgejo) first, GitHub as the fallback (build.gradle). */
+    static final String LATEST = BuildConfig.UPDATE_FEEDS;
+    static final String DIGEST_SUFFIX = ".sha256";
     static final String ASSET = "luch-release.apk";
     private static final int TIMEOUT_MS = 15_000;
     private static final long MAX_APK = 50L * 1024 * 1024;
 
     /** A release newer than this app. */
     static final class Release {
-        final String version, url, sha256;
+        final String version, url;
+        /** Hex SHA-256 of the APK; null until fetched from {@link #digestUrl} (Forgejo has no digest field). */
+        String sha256;
+        final String digestUrl;
 
-        Release(String version, String url, String sha256) {
+        Release(String version, String url, String sha256, String digestUrl) {
             this.version = version;
             this.url = url;
             this.sha256 = sha256;
+            this.digestUrl = digestUrl;
         }
     }
 
@@ -100,26 +106,46 @@ final class Updater {
         if (release.optBoolean("draft") || release.optBoolean("prerelease")) return null;
         String version = release.optString("tag_name").replaceFirst("^[vV]", "");
         JSONArray assets = release.optJSONArray("assets");
+        String url = "", digest = "", digestUrl = "";
         for (int i = 0; assets != null && i < assets.length(); i++) {
             JSONObject a = assets.optJSONObject(i);
-            if (a == null || !ASSET.equals(a.optString("name"))) continue;
-            String digest = a.optString("digest");
-            if (!digest.matches("sha256:[0-9a-f]{64}")) return null;
-            String url = a.optString("browser_download_url");
-            if (url.isEmpty() || version.isEmpty()) return null;
-            return new Release(version, url, digest.substring("sha256:".length()));
+            if (a == null) continue;
+            String name = a.optString("name");
+            if (ASSET.equals(name)) {
+                url = a.optString("browser_download_url");
+                digest = a.optString("digest");   // GitHub adds one to every asset
+            } else if ((ASSET + DIGEST_SUFFIX).equals(name)) {
+                digestUrl = a.optString("browser_download_url");   // Forgejo: the CI publishes it next to the APK
+            }
         }
-        return null;
+        if (url.isEmpty() || version.isEmpty()) return null;
+        if (digest.matches("sha256:[0-9a-f]{64}")) return new Release(version, url, digest.substring(7), "");
+        return digestUrl.isEmpty() ? null : new Release(version, url, null, digestUrl);
     }
 
-    /** Asks {@code latestUrl} (GitHub's latest release) for a release newer than this app; null if there is none. */
-    static Release check(Context context, String latestUrl) throws IOException {
-        try {
-            Release r = parse(new JSONObject(new String(get(latestUrl, 1024 * 1024), StandardCharsets.UTF_8)));
-            return r != null && compare(r.version, currentVersion(context)) > 0 ? r : null;
-        } catch (JSONException e) {
-            throw new IOException("not a release: " + e.getMessage());
+    /**
+     * Asks the feeds ({@code feeds}, separated by "|") one after another for a release newer than this app; the first
+     * one that answers decides, a feed that fails passes the question on. Null if there is nothing newer.
+     */
+    static Release check(Context context, String feeds) throws IOException {
+        IOException last = new IOException("no release feed");
+        for (String feed : feeds.split("\\|")) {
+            try {
+                Release r = parse(new JSONObject(new String(get(feed, 1024 * 1024), StandardCharsets.UTF_8)));
+                if (r == null || compare(r.version, currentVersion(context)) <= 0) return null;
+                if (r.sha256 == null) {
+                    String hex = new String(get(r.digestUrl, 1024), StandardCharsets.UTF_8).trim().split("\\s+")[0];
+                    if (!hex.matches("[0-9a-f]{64}")) throw new IOException("bad digest file");
+                    r.sha256 = hex;
+                }
+                return r;
+            } catch (JSONException e) {
+                last = new IOException("not a release: " + e.getMessage());
+            } catch (IOException e) {
+                last = e;
+            }
         }
+        throw last;
     }
 
     /** Downloads the APK to the cache and checks its digest; throws if it does not match. */

@@ -29,6 +29,14 @@ android {
         buildConfig true
     }
 
+    // Where the self-updater looks for a newer release, in order ("|"): ALS first, GitHub as the fallback.
+    // -PluchUpdateFeeds=... points a build at a fork's releases (a test of the whole chain).
+    defaultConfig {
+        buildConfigField 'String', 'UPDATE_FEEDS', '"' + String.valueOf(project.findProperty('luchUpdateFeeds') ?:
+                'https://altlinux.space/api/v1/repos/Luch/luch-android/releases/latest|' +
+                'https://api.github.com/repos/Toxblh/luch-android/releases/latest') + '"'
+    }
+
     // Where the APK is published decides whether it may update itself:
     //  - github: the release APK on GitHub, updates itself from GitHub releases (docs/updates.md);
     //  - fdroid, play: the store updates the app; a self-updater there is against both stores' rules.

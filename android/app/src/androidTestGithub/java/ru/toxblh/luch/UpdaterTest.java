@@ -78,6 +78,24 @@ public class UpdaterTest {
     }
 
     @Test
+    public void aForgejoReleaseCarriesItsDigestInAFileNextToTheApk() throws Exception {
+        server.put("/latest", release("v99.0", false, false, asset("luch-release.apk", null),
+                asset("luch-release.apk.sha256", null)));
+        server.put("/releases/download/v0.3/luch-release.apk.sha256", (hex(32) + "  luch-release.apk\n").getBytes());
+        Updater.Release r = Updater.check(context, server.url("/latest"));
+        assertNotNull(r);
+        assertEquals(hex(32), r.sha256);
+    }
+
+    @Test
+    public void aFeedThatFailsPassesTheQuestionToTheNextOne() throws Exception {
+        server.put("/latest", release("v99.0", false, false, asset("luch-release.apk", "sha256:" + hex(32))));
+        Updater.Release r = Updater.check(context, server.url("/gone") + "|" + server.url("/latest"));
+        assertNotNull(r);
+        assertEquals("99.0", r.version);
+    }
+
+    @Test
     public void releasesWithoutASignedApkOrNotFinalAreIgnored() throws Exception {
         assertNull(Updater.parse(release("v0.3", false, false, asset("luch-debug.apk", "sha256:" + hex(32)))));
         assertNull(Updater.parse(release("v0.3", true, false, asset("luch-release.apk", "sha256:" + hex(32)))));
@@ -102,7 +120,7 @@ public class UpdaterTest {
     public void aDownloadWithTheRightDigestAndSignerIsAccepted() throws Exception {
         byte[] apk = Compat.readFile(new File(context.getApplicationInfo().sourceDir));
         server.put("/a.apk", apk);
-        Updater.Release r = new Updater.Release("99.0", server.url("/a.apk"), sha256(apk));
+        Updater.Release r = new Updater.Release("99.0", server.url("/a.apk"), sha256(apk), "");
         File f = Updater.download(context, r);
         assertTrue(Updater.sameSigner(context, f));
     }
@@ -111,7 +129,7 @@ public class UpdaterTest {
     public void aDownloadWithTheWrongDigestIsRefused() throws Exception {
         byte[] apk = Compat.readFile(new File(context.getApplicationInfo().sourceDir));
         server.put("/a.apk", apk);
-        Updater.Release r = new Updater.Release("99.0", server.url("/a.apk"), hex(32));
+        Updater.Release r = new Updater.Release("99.0", server.url("/a.apk"), hex(32), "");
         try {
             Updater.download(context, r);
             fail("accepted an APK whose digest does not match");
@@ -136,9 +154,9 @@ public class UpdaterTest {
                 .put("assets", a);
     }
 
-    private static JSONObject asset(String name, String digest) throws Exception {
+    private JSONObject asset(String name, String digest) throws Exception {
         JSONObject o = new JSONObject().put("name", name)
-                .put("browser_download_url", "https://github.com/Toxblh/luch-android/releases/download/v0.3/" + name)
+                .put("browser_download_url", server.url("/releases/download/v0.3/" + name))
                 .put("size", 123);
         if (digest != null) o.put("digest", digest);
         return o;

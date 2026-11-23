@@ -4,7 +4,7 @@
 
 | Build (flavor) | Where it is published | Who updates it |
 |---|---|---|
-| `github` | `luch-release.apk` on [Releases](https://github.com/Toxblh/luch-android/releases) | Luch itself, from GitHub releases |
+| `github` | `luch-release.apk` on the releases of [ALS](https://altlinux.space/Luch/luch-android/releases) and [GitHub](https://github.com/Toxblh/luch-android/releases) | Luch itself, from those releases |
 | `fdroid` | F-Droid | F-Droid. A self-updater is against F-Droid's rules |
 | `play` | an app store | the store. Google Play does not allow an app to update itself |
 
@@ -14,11 +14,12 @@ removes the updater code from the other builds (check with the APK's dex: no `ap
 
 ## What the `github` build does
 
-1. A minute after the service starts, then once a day, it asks
-   `https://api.github.com/repos/Toxblh/luch-android/releases/latest` (no account, no identifiers beyond what any
-   HTTP request carries).
+1. A minute after the service starts, then once a day, it asks the ALS release feed
+   (`https://altlinux.space/api/v1/repos/Luch/luch-android/releases/latest`) and, if that does not answer, GitHub's
+   (`https://api.github.com/repos/Toxblh/luch-android/releases/latest`); no account, no identifiers beyond what any
+   HTTP request carries. The feeds are `BuildConfig.UPDATE_FEEDS` (`-PluchUpdateFeeds=a|b` changes them).
 2. It takes a release only if it is final (not a draft or pre-release), its version is higher than the app's, and it
-   has an asset named exactly `luch-release.apk` with a SHA-256 `digest` (GitHub adds one to every asset).
+   has an asset named exactly `luch-release.apk` with a SHA-256: GitHub's `digest` of the asset, or, on ALS (Forgejo has none), the file `luch-release.apk.sha256` published next to it.
 3. The download must match that digest, and the APK must be signed with the same key as the running app. The system
    installer checks the key again.
 4. Installing:
@@ -36,7 +37,7 @@ Failures worth knowing about (a digest or key mismatch, the installer refusing) 
 
 ## Releasing
 
-- CI signs `luch-release.apk` with the release key from the repository secrets `LUCH_KEYSTORE_BASE64`,
+- CI (`.forgejo/workflows/build.yml` on ALS, `.github/workflows/build.yml` on GitHub) signs `luch-release.apk` with the release key from the repository secrets `LUCH_KEYSTORE_BASE64`,
   `LUCH_KEYSTORE_PASSWORD`, `LUCH_KEY_ALIAS`, `LUCH_KEY_PASSWORD`. **Every release must be signed with that same
   key**: Android installs an update only over an APK with the same signature. If the key is lost, installed copies
   can never be updated again; keep a copy of it outside GitHub.
