@@ -30,8 +30,17 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     private boolean statsOn;
     private SurfaceView video;
     private FrameLayout rootView;
-    /** How the picture meets the screen: 0 fit with bars, 1 fill and crop the edges, 2 stretch. */
+    /** How the picture meets the screen: 0 fit with bars, 1 fill and crop the edges, 2 stretch, 3 fit what is shown without its own black bars. */
     private int fitMode;
+    private static final int MODES = 4;
+    /** Mode 3: the part of the video that is not black, in video pixels (x, y, w, h), as drawn now and as last settled on. */
+    private final float[] cropNow = new float[4];
+    private float[] cropWanted;
+    private float[] cropSeen;
+    private int cropSeenCount;
+    private android.animation.ValueAnimator cropAnim;
+    private final android.os.Handler cropHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private boolean analyzing;
     /** A tap on the picture (a touch screen) brings up from whom it comes and the figures; another tap hides it. */
     private android.widget.ScrollView panel;
     private final Luch.Listener panelListener = () -> runOnUiThread(this::refreshPanel);
@@ -50,7 +59,10 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         }
         // Ask the display for its game mode: the least picture processing, the least delay (Moonlight does the same).
         if (Build.VERSION.SDK_INT >= 30) getWindow().setPreferMinimalPostProcessing(true);
-        fitMode = prefs().getInt("fit_mode", 0);
+        // Never chosen on this screen: a phone running Luch (a gallery on its side has black bars of its own) is shown
+        // without them, anything else fitted. A choice made with Up or in the panel stays.
+        MirrorSession first = MirrorSession.current;
+        fitMode = prefs().getInt("fit_mode", first != null && first.senderApp.startsWith("luch-android") ? 3 : 0);
         SurfaceView view = new SurfaceView(this);
         video = view;
         view.getHolder().addCallback(this);
@@ -94,8 +106,24 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         MirrorSession s = MirrorSession.current;
         if (s == null || pw <= 0 || ph <= 0 || s.videoWidth() <= 0 || s.videoHeight() <= 0) return;
         float kw = pw / (float) s.videoWidth(), kh = ph / (float) s.videoHeight();
-        int w, h;
-        if (fitMode == 2) {
+        int w, h, mx = 0, my = 0;
+        if (fitMode == 3) {
+            // the picture without the black bars the sender's own screen had around it (a gallery on a phone on its side)
+            float vw = s.videoWidth(), vh = s.videoHeight();
+            float cx = 0, cy = 0, cw = vw, ch = vh;
+            if (cropNow[2] > 0 && cropNow[3] > 0) {
+                cx = cropNow[0];
+                cy = cropNow[1];
+                cw = cropNow[2];
+                ch = cropNow[3];
+            }
+            float k = Math.min(pw / cw, ph / ch);
+            w = Math.round(vw * k);
+            h = Math.round(vh * k);
+            // the view is centred in the window; the margins move it so that the middle of the kept part is in the middle
+            mx = Math.round((vw / 2f - (cx + cw / 2f)) * k);
+            my = Math.round((vh / 2f - (cy + ch / 2f)) * k);
+        } else if (fitMode == 2) {
             w = pw;
             h = ph;
         } else {
@@ -104,15 +132,145 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             h = Math.round(s.videoHeight() * k);
         }
         FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) video.getLayoutParams();
-        if (p.width != w || p.height != h) {
+        android.util.Log.i(LuchService.TAG, "picture " + w + "x" + h + " of " + pw + "x" + ph + ", video " + s.videoWidth() + "x"
+                + s.videoHeight() + ", mode " + fitMode);
+        if (p.width != w || p.height != h || p.leftMargin != mx || p.topMargin != my) {
             p.width = w;
             p.height = h;
+            p.leftMargin = mx;
+            p.rightMargin = 0;
+            p.topMargin = my;
+            p.bottomMargin = 0;
             video.post(video::requestLayout);
         }
+        if (fitMode == 3) startAnalysis();
+    }
+
+    /** Looks at the picture a few times a second and keeps the part of it that is not black. API 26+ (PixelCopy). */
+    private void startAnalysis() {
+        if (analyzing || Build.VERSION.SDK_INT < 26) return;
+        analyzing = true;
+        cropHandler.postDelayed(this::analyze, 90); // ~10 looks a second: a swiped-in photo is known within a quarter of a second
+    }
+
+    private void analyze() {
+        analyzing = false;
+        MirrorSession s = MirrorSession.current;
+        Surface surface = video.getHolder().getSurface();
+        if (fitMode != 3 || s == null || surface == null || !surface.isValid() || s.videoWidth() <= 0 || s.videoHeight() <= 0) {
+            if (fitMode == 3) startAnalysis();
+            return;
+        }
+        final int bw = 96, bh = Math.max(16, Math.round(96f * s.videoHeight() / s.videoWidth()));
+        final android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(bw, bh, android.graphics.Bitmap.Config.ARGB_8888);
+        try {
+            android.view.PixelCopy.request(video, bmp, result -> {
+                if (result == android.view.PixelCopy.SUCCESS) onFrame(bmp, s.videoWidth(), s.videoHeight());
+                bmp.recycle();
+                startAnalysis();
+            }, cropHandler);
+        } catch (RuntimeException e) {
+            startAnalysis();
+        }
+    }
+
+    private int[] lastPixels;
+
+    private void onFrame(android.graphics.Bitmap bmp, int vw, int vh) {
+        int w = bmp.getWidth(), h = bmp.getHeight();
+        int[] px = new int[w * h];
+        bmp.getPixels(px, 0, w, 0, 0, w, h);
+        // How much the picture moved since the last look: a swipe between two photos moves all of it, a toolbar a little.
+        long diff = 0;
+        if (lastPixels != null && lastPixels.length == px.length) {
+            for (int i = 0; i < px.length; i += 3) {
+                int a = px[i], b = lastPixels[i];
+                int da = (((a >> 16) & 0xFF) + ((a >> 8) & 0xFF) + (a & 0xFF)) - (((b >> 16) & 0xFF) + ((b >> 8) & 0xFF) + (b & 0xFF));
+                diff += Math.abs(da) / 3;
+            }
+            diff /= Math.max(1, px.length / 3);
+        }
+        lastPixels = px;
+        final int dark = 28;
+        int top = -1, bottom = -1, left = w, right = -1;
+        for (int y = 0; y < h; y++) {
+            boolean lit = false;
+            for (int x = 0; x < w; x++) {
+                int c = px[y * w + x];
+                int luma = (((c >> 16) & 0xFF) * 3 + ((c >> 8) & 0xFF) * 6 + (c & 0xFF)) / 10;
+                if (luma > dark) {
+                    lit = true;
+                    if (x < left) left = x;
+                    if (x > right) right = x;
+                }
+            }
+            if (lit) {
+                if (top < 0) top = y;
+                bottom = y;
+            }
+        }
+        if (top < 0 || right < left) return; // all black: nothing to say
+        // a little more than the edge, and never less than a quarter of the picture in either direction
+        left = Math.max(0, left - 1);
+        top = Math.max(0, top - 1);
+        right = Math.min(w - 1, right + 1);
+        bottom = Math.min(h - 1, bottom + 1);
+        float[] want = {left * vw / (float) w, top * vh / (float) h, (right - left + 1) * vw / (float) w,
+                (bottom - top + 1) * vh / (float) h};
+        if (want[2] < vw * .25f || want[3] < vh * .25f || (want[2] > vw * .96f && want[3] > vh * .96f)) {
+            want = new float[] {0, 0, 0, 0}; // no bars worth cutting
+        }
+        // the same answer twice in a row before the picture moves, so a bar or a toolbar coming and going does not make it breathe
+        // The same bars twice running and the picture still: a swipe is under way while it moves and its edges slide, so
+        // neither the half-way state nor the slow end of the slide is taken; the one that stays is.
+        boolean still = diff < 6 || (cropSeen != null && near(cropSeen, want, vw * .004f, vh * .004f));
+        if (cropSeen != null && still && near(cropSeen, want, vw * .01f, vh * .01f)) cropSeenCount++;
+        else {
+            cropSeen = want;
+            cropSeenCount = 1;
+        }
+        if (cropSeenCount >= 2 && (cropWanted == null || !near(cropWanted, want, vw * .03f, vh * .03f))) {
+            cropWanted = want;
+            animateCrop(want);
+        }
+    }
+
+    private static boolean near(float[] a, float[] b, float dx, float dy) {
+        return Math.abs(a[0] - b[0]) <= dx && Math.abs(a[1] - b[1]) <= dy && Math.abs(a[2] - b[2]) <= dx && Math.abs(a[3] - b[3]) <= dy;
+    }
+
+    private void animateCrop(float[] to) {
+        android.util.Log.i(LuchService.TAG, "crop apply " + java.util.Arrays.toString(to));
+        MirrorSession s = MirrorSession.current;
+        if (s == null) return;
+        final float[] from = cropNow.clone();
+        final float[] end = to[2] > 0 ? to : new float[] {0, 0, s.videoWidth(), s.videoHeight()};
+        if (from[2] <= 0) {
+            from[0] = 0;
+            from[1] = 0;
+            from[2] = s.videoWidth();
+            from[3] = s.videoHeight();
+        }
+        if (cropAnim != null) cropAnim.cancel();
+        cropAnim = android.animation.ValueAnimator.ofFloat(0f, 1f);
+        cropAnim.setDuration(170);
+        cropAnim.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+        cropAnim.addUpdateListener(a -> {
+            float t = (float) a.getAnimatedValue();
+            for (int i = 0; i < 4; i++) cropNow[i] = from[i] + (end[i] - from[i]) * t;
+            fit(rootView.getWidth(), rootView.getHeight());
+        });
+        cropAnim.start();
     }
 
     private void setFitMode(int mode) {
         fitMode = mode;
+        if (mode != 3) {
+            cropNow[2] = 0;
+            cropNow[3] = 0;
+            cropWanted = null;
+            cropSeen = null;
+        }
         prefs().edit().putInt("fit_mode", mode).apply();
         fit(rootView.getWidth(), rootView.getHeight());
         refreshPanel();
@@ -191,6 +349,8 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
 
     @Override
     protected void onDestroy() {
+        cropHandler.removeCallbacksAndMessages(null);
+        if (cropAnim != null) cropAnim.cancel();
         handler.removeCallbacks(closeIfStillStopped);
         if (shown == this) shown = null;
         super.onDestroy();
@@ -238,13 +398,17 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             col.addView(Ui.flowCard(this, peers.isEmpty() ? null : peers.get(0), live, Ui.isTv(this), Luch.name(this)));
             col.addView(Ui.stats(this, live), Ui.below(this, 10));
         }
-        col.addView(Ui.chips(this, new String[] {getString(R.string.fit_fit), getString(R.string.fit_fill),
-                getString(R.string.fit_stretch)}, fitMode, this::setFitMode), Ui.below(this, 12));
+        col.addView(Ui.chips(this, fitNames(), fitMode, this::setFitMode), Ui.below(this, 12));
         android.widget.Button stop = Ui.button(this, getString(R.string.action_stop), true, v -> onBackPressed());
         col.addView(stop, new android.widget.LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 52)));
         ((android.widget.LinearLayout.LayoutParams) stop.getLayoutParams()).topMargin = Ui.dp(this, 10);
         panel.removeAllViews();
         panel.addView(col);
+    }
+
+    private String[] fitNames() {
+        return new String[] {getString(R.string.fit_fit), getString(R.string.fit_fill), getString(R.string.fit_stretch),
+                getString(R.string.fit_smart)};
     }
 
     private void toggleStats() {
@@ -256,9 +420,8 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-            setFitMode((fitMode + 1) % 3);
-            android.widget.Toast.makeText(this, new String[] {getString(R.string.fit_fit), getString(R.string.fit_fill),
-                    getString(R.string.fit_stretch)}[fitMode], android.widget.Toast.LENGTH_SHORT).show();
+            setFitMode((fitMode + 1) % MODES);
+            android.widget.Toast.makeText(this, fitNames()[fitMode], android.widget.Toast.LENGTH_SHORT).show();
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER

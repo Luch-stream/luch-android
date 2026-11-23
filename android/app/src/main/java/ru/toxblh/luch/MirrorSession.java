@@ -47,6 +47,9 @@ final class MirrorSession {
         void send(JSONObject msg);
     }
 
+    /** The sender's app name from its hello; a phone running Luch is shown without its own black bars by default. */
+    volatile String senderApp = "";
+
     static final int HEADER = 24;
     static final int SHARD = 1376;
     private static final int KIND_VIDEO = 1, KIND_AUDIO = 2;
@@ -182,6 +185,7 @@ final class MirrorSession {
         audioChannels = a == null ? 0 : a.optInt("channels", 2);
         audioFrameMs = a == null ? 5 : a.optInt("frame_ms", 5);
         audioSync = a != null && a.optBoolean("sync", false);
+        senderApp = start.optString("_app"); // put there by the control server from the sender's hello
     }
 
     /** Opens both sockets and the screen; returns {video port, audio port}. */
@@ -553,7 +557,7 @@ final class MirrorSession {
 
     // ---- audio ---------------------------------------------------------------------------------------------
 
-    private static final int AUDIO_BUFFER_STEP_MS = 10, MAX_AUDIO_BUFFER_MS = 100;
+    private static final int AUDIO_BUFFER_STEP_MS = 10, MAX_AUDIO_BUFFER_MS = 200; // 200: a phone on Wi-Fi sends in 20 ms packets that arrive in bursts
 
     private void audioLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
