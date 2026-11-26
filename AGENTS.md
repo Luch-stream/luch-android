@@ -25,6 +25,9 @@ sides together.
 - `ANDROID_SERIAL=<emulator> ./gradlew connectedGithubDebugAndroidTest` on an Android TV emulator (API 34
   `android-tv;arm64-v8a` works on Apple Silicon). **Always set `ANDROID_SERIAL`**: Gradle otherwise runs the tests on
   every connected device, including a real TV on `adb connect`.
+- On a real TV run single classes only (`-Pandroid.testInstrumentationRunnerArguments.class=ru.toxblh.luch.MediaCastTest`,
+  with `-PluchDev` when a release is installed): `MirrorStartTest` presses `KEYCODE_SLEEP`, and on some projectors (XGIMI)
+  that is standby with Wi-Fi off, so adb over the network is gone until someone turns it back on.
 - Fix a bug test-first when you can: a failing `androidTest` that shows it, then the fix.
 
 ## Things that are easy to get wrong
