@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Media (PROTOCOL.md 4b) is plain HTTP from the sender on the local network, and some sites still serve video
+     over http: the platform player and the subtitle fetch go through Android's HTTP stack, which refuses cleartext
+     unless it is allowed here. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

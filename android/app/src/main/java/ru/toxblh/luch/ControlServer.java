@@ -210,9 +210,30 @@ final class ControlServer {
                                     .put("detail", String.valueOf(e.getMessage())));
                         }
                         break;
+                    case "media":
+                        if (Sender.active() || MirrorSession.current != null || PhotoSession.current != null) {
+                            send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "media"));
+                            break;
+                        }
+                        try {
+                            MediaCast.open(context, control, address, msg);
+                            send(out, new JSONObject().put("t", "media_ready"));
+                            Log.i(LuchService.TAG, "media from " + peerName);
+                        } catch (MediaLink.BadLink e) {
+                            send(out, new JSONObject().put("t", "error").put("code", "bad_link").put("for", "media")
+                                    .put("detail", e.getMessage()));
+                        } catch (MediaCast.NoSource | RuntimeException e) {
+                            send(out, new JSONObject().put("t", "error").put("code", "media_failed").put("for", "media")
+                                    .put("detail", String.valueOf(e.getMessage())));
+                        }
+                        break;
+                    case "media_cmd":
+                        MediaCast.command(control, msg);
+                        break;
                     case "stop":
                         MirrorSession.stopFromSender(control);
                         PhotoSession.closeFrom(control);
+                        MediaCast.closeFrom(control);
                         break;
                     case "bench": {
                         // Takes the hardware decoders for a few seconds: not while mirroring or already measuring.
@@ -230,6 +251,19 @@ final class ControlServer {
                         }, "luch-bench").start();
                         break;
                     }
+                    case "sleep":
+                        // Standby, as the remote's power key (SleepService). Answered first: the network may go
+                        // with the screen.
+                        if (SleepService.state(context).equals("on")) {
+                            send(out, new JSONObject().put("t", "sleeping"));
+                            main.post(() -> {
+                                if (!SleepService.sleep()) Log.w(LuchService.TAG, "sleep: the service is not running");
+                            });
+                        } else {
+                            send(out, new JSONObject().put("t", "error").put("code", "sleep_unavailable")
+                                    .put("for", "sleep").put("sleep", SleepService.state(context)));
+                        }
+                        break;
                     case "bye":
                         return;
                     default:
@@ -246,6 +280,7 @@ final class ControlServer {
                 SENDERS.remove(control);
                 MirrorSession.stopFromSender(control);
                 PhotoSession.closeFrom(control);
+                MediaCast.closeFrom(control);
             }
             if (peerId != null) Luch.disconnected(peerId);
         }
@@ -269,7 +304,11 @@ final class ControlServer {
                 .put("model", Luch.model())
                 .put("decoders", new JSONArray(Luch.decoders()))
                 .put("max", Luch.maxSize())
-                .put("modes", new JSONArray().put("mirror").put("photo"))
+                .put("modes", new JSONArray().put("mirror").put("photo").put("media"))
+                // What "media" plays here (PROTOCOL.md, section 4b).
+                .put("media_types", new JSONArray(java.util.Arrays.asList(MediaLink.TYPES)))
+                // Whether {"t":"sleep"} works here: "on", "off" (not turned on in Accessibility), "no" (Android < 9).
+                .put("sleep", SleepService.state(context))
                 // Android version, and what works worse on it than on 8.0+ (PROTOCOL.md, section 5).
                 .put("sdk", android.os.Build.VERSION.SDK_INT)
                 .put("limits", Caps.limits())

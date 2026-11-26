@@ -26,6 +26,9 @@ import java.util.Map;
  * low-memory killer leaves it alone. Idle it is one thread blocked in accept() and the system's mDNS doing the rest.
  */
 public class LuchService extends Service {
+    /** The control port this receiver listens on (47800 unless taken), 0 until started; for on-device tests. */
+    static volatile int listening;
+
     static final String TAG = "Luch";
     private static final String CHANNEL = "luch";
 
@@ -52,6 +55,7 @@ public class LuchService extends Service {
         nsd = Compat.service(this, NsdManager.class);
         server = new ControlServer(this);
         int port = server.start();
+        listening = port;
         if (port <= 0) {
             Luch.setStatus(getString(R.string.status_port_busy));
             return;

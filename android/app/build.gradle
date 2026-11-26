@@ -68,6 +68,14 @@ android {
     }
 
     buildTypes {
+        // -PluchDev: a debug build beside an installed release (ru.toxblh.luch.dev), for a device whose release
+        // was signed with another key; it takes the next free control port and announces itself as usual.
+        debug {
+            if (project.hasProperty('luchDev')) {
+                applicationIdSuffix '.dev'
+                versionNameSuffix '-dev'
+            }
+        }
         release {
             minifyEnabled true
             shrinkResources true
@@ -96,4 +104,8 @@ android {
 dependencies {
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    // JVM tests of the logic that needs no device (./gradlew testFdroidDebugUnitTest); org.json is the real one,
+    // as Android's is only a stub there.
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
 }

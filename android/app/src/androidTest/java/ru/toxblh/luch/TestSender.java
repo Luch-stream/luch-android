@@ -53,9 +53,12 @@ final class TestSender {
 
     static TestSender connect(long ms) throws IOException {
         long until = SystemClock.uptimeMillis() + ms;
+        // The service picks its port when it starts (another receiver on the device may hold 47800).
+        while (LuchService.listening <= 0 && SystemClock.uptimeMillis() < until) SystemClock.sleep(50);
         while (true) {
             try {
-                return new TestSender(new Socket(InetAddress.getLoopbackAddress(), Luch.PORT));
+                return new TestSender(new Socket(InetAddress.getByName("127.0.0.1"),
+                        LuchService.listening > 0 ? LuchService.listening : Luch.PORT));
             } catch (IOException e) {
                 if (SystemClock.uptimeMillis() > until) throw e;
                 SystemClock.sleep(200);

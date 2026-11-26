@@ -121,6 +121,58 @@ either   → {"t":"stop"}                   receiver adds "by":"receiver","reaso
   down-scaled to what the screen can use; left and right on the remote (or a swipe) go to the neighbour, Back leaves.
 - Not while a mirroring session is running: `{"t":"error","code":"busy","for":"photo"}`.
 
+## 4b. Media
+
+A sender hands the receiver a video (or a sound) to play itself, in the file's own quality, the way Cast and AirPlay
+do: the picture does not depend on the sender's screen. The receiver lists `"media"` in `modes` when it can.
+
+```
+sender   → {"t":"media","via":"direct"|"sender",
+            "src":[{"url":"...","mime":"video/mp4"|"application/vnd.apple.mpegurl"|...,"w":3840,"h":2160,"codec":"hevc"}],
+            "headers":{"Referer":"...","User-Agent":"...","Cookie":"..."},
+            "title":"...","poster":"<url>","start":12.5,"rate":1.0,"paused":false,
+            "subs":[{"id":"s1","url":"...","mime":"text/vtt"|"application/x-subrip","lang":"en","label":"English"}]}
+receiver → {"t":"media_ready"}            or {"t":"error","code":"media_failed"|"busy"|"bad_link","for":"media","detail":"..."}
+receiver → {"t":"media_state","state":"loading"|"playing"|"paused"|"ended"|"error","pos":12.5,"dur":3600.0,
+            "rate":1.0,"live":false,"w":3840,"h":2160,"by":"receiver"|"sender",
+            "tracks":{"audio":[{"id":"a0","lang":"en","label":"..."}],"sub":[{"id":"s1","lang":"en","label":"English"}]},
+            "sel":{"audio":"a0","sub":null},"detail":"<on error>"}
+sender   → {"t":"media_cmd","do":"play"|"pause"|"toggle"|"seek"|"skip"|"rate"|"audio"|"sub"|"state",
+            "pos":<s, seek>,"by":<s, skip, may be negative>,"rate":<rate>,"id":<track id, audio/sub; null = subtitles off>}
+either   → {"t":"stop"}                   receiver adds "by":"receiver","reason":"back"|"ended" when it ends by itself
+```
+
+- **What is played.** `src` lists the same content in one or more forms (the `<source>`s of a page, or the variants a
+  site offers); the receiver plays the best one it can: a MIME type it can play, a codec it can decode (`decoders`),
+  no bigger than its `max`, then the biggest. An HLS or DASH playlist is one `src`: the receiver picks its variant
+  itself, up to its own screen, which is what makes a 4K video play in 4K from a sender with a 1080p screen.
+- **Who fetches.** `via:"direct"`: the receiver fetches from the internet itself (the sender may be switched off
+  meanwhile). It must refuse links to loopback, link-local and private addresses other than the sender's own (a
+  sender must not make the TV reach into its network), with `bad_link`. `headers` (only `Referer`, `User-Agent`,
+  `Origin`, `Cookie`, `Authorization`; others are ignored) go with every request. `via:"sender"`: every link points at
+  the sender's address, as for photos (section 4a): local files, or a stream the sender relays (a page behind a VPN, a
+  site that needs the browser's cookies, Wi-Fi Direct). The sender serves HTTP/1.1 with `Range`, so the receiver can seek.
+- **State.** The receiver owns the playback; a sender (and the page, the remote, a phone) only asks. `media_state`
+  goes to the sender that started it on every change of `state`, `rate`, tracks or a seek, and every 5 s while
+  playing; between them the sender moves `pos` on by `rate` × elapsed time. `"do":"state"` asks for one now. `by` says who caused the change (the
+  remote or a `media_cmd`), so a sender can show "paused on the TV". `dur` is `null` for a live stream (`live:true`).
+- **On the TV.** OK or Play/Pause toggles, left/right skip 10 s (held: the target moves on, 30 s steps after a while,
+  and the seek happens when the key is let go), up shows the controls, down, the menu key or a long OK opens speed,
+  sound track and subtitles, Back stops. The controls hide after 3 s.
+- A new `media` replaces the one playing. Not while a mirroring session or photos are shown: `busy`. Subtitles from
+  `subs` are fetched under the same rules as the media; WebVTT and SubRip are understood.
+
+## 4c. Sleep
+
+```
+sender   → {"t":"sleep"}
+receiver → {"t":"sleeping"}               then the TV goes to standby, as with the remote's power key
+           or {"t":"error","code":"sleep_unavailable","for":"sleep","sleep":"off"|"no"}
+```
+
+`welcome` carries `"sleep"`: `"on"` (works), `"off"` (the person has not turned it on: Android lets an app put the
+screen to sleep only through an accessibility service, which the receiver asks for once) or `"no"` (before Android 9).
+
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 
 `welcome` also carries:
@@ -190,6 +242,6 @@ to file it as an issue. Sending reports to a server must stay opt-in on the send
 
 ## 7. Later versions (reserved)
 
-Reed-Solomon FEC shards (the header already has room); pairing with a code shown on the TV; `{"t":"media","url":...}`
-with `play/pause/seek/rate/track/sub` and `state` reports, the TV playing the original file; `{"t":"photo",...}` (done, section 4a: a sender-served link, no inline data);
+Reed-Solomon FEC shards (the header already has room); pairing with a code shown on the TV; `media` (done, section
+4b); `{"t":"photo",...}` (done, section 4a: a sender-served link, no inline data);
 `{"t":"key","code":...}` from the TV remote back to the sender (next slide, pause).

@@ -145,6 +145,24 @@ public class StatusActivity extends Activity {
         super.onResume();
         Luch.addListener(listener);
         render();
+        if (!SleepService.returnedTooSoon(this)) askSleepOnce();
+    }
+
+    /**
+     * On a TV, once: offer to turn on the accessibility service that lets a computer put the TV to sleep, saying
+     * what it is for before Android's own warning does.
+     */
+    private void askSleepOnce() {
+        if (!tvMode || !SleepService.supported() || SleepService.enabled(this)) return;
+        android.content.SharedPreferences prefs = getSharedPreferences("luch", MODE_PRIVATE);
+        if (prefs.getBoolean("sleep_asked", false) || getIntent().getBooleanExtra("demo", false)) return;
+        prefs.edit().putBoolean("sleep_asked", true).apply();
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(R.string.sleep_ask_title)
+                .setMessage(R.string.sleep_ask_message)
+                .setPositiveButton(R.string.sleep_ask_open, (d, w) -> SleepService.openSettings(this))
+                .setNegativeButton(R.string.sleep_ask_later, null)
+                .show();
     }
 
     @Override
@@ -855,7 +873,32 @@ public class StatusActivity extends Activity {
             card.addView(switchRow(getString(R.string.setting_offer), Luch.offerNotification(this),
                     (b, on) -> Luch.setOfferNotification(this, on)));
         }
+        if (SleepService.supported()) {
+            View line = new View(this);
+            line.setBackgroundColor(Ui.DIVIDER);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+            lp.setMargins(dp(20), 0, dp(20), 0);
+            card.addView(line, lp);
+            card.addView(sleepRow());
+        }
         content.addView(card, Ui.below(this, 20));
+    }
+
+    /** Turning the TV off from a computer: on, or a way to the accessibility switch that turns it on. */
+    private View sleepRow() {
+        boolean on = SleepService.enabled(this);
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(20), dp(14), dp(20), dp(14));
+        row.addView(Ui.text(this, getString(R.string.setting_sleep), 17, Ui.TEXT, false),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        row.addView(Ui.text(this, getString(on ? R.string.setting_sleep_on : R.string.setting_sleep_set_up), 15,
+                on ? Ui.MUTED : Ui.AMBER, !on));
+        // Also when on: the same page turns it off again.
+        row.setFocusable(true);
+        row.setClickable(true);
+        row.setOnClickListener(v -> SleepService.openSettings(this));
+        return row;
     }
 
     private View switchRow(String label, boolean on, CompoundButton.OnCheckedChangeListener l) {
