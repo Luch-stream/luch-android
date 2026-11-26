@@ -191,6 +191,20 @@ public class MediaCastTest {
         assertNull(MediaCast.current);
     }
 
+    /** Another quality of the same video from the same sender: no stop, the new one plays from where it is asked. */
+    @Test
+    public void theSameSenderSwitchesQualityWithoutAStop() throws Exception {
+        sender.send(media());
+        state(m -> m.optString("state").equals("playing"), "playing");
+        sender.send(media().put("start", 6));
+        until(m -> m.optString("t").equals("media_ready"), 5_000, "media_ready again");
+        JSONObject again = state(m -> m.optString("state").equals("playing") && m.getDouble("pos") >= 5.5, "playing from 6 s");
+        assertTrue(again.toString(), again.getDouble("pos") < 9);
+        for (JSONObject m : sender.drain()) {
+            assertTrue("no stop for a switch: " + m, !m.optString("t").equals("stop"));
+        }
+    }
+
     @Test
     public void theEndIsSaid() throws Exception {
         sender.send(media().put("start", 10.5));

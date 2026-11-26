@@ -160,7 +160,7 @@ either   → {"t":"stop"}                   receiver adds "by":"receiver","reaso
   and the seek happens when the key is let go), up shows the controls, down, the menu key or a long OK opens speed,
   sound track and subtitles, Back stops. The controls hide after 3 s.
 - A new `media` replaces the one playing. Not while a mirroring session or photos are shown: `busy`. Subtitles from
-  `subs` are fetched under the same rules as the media; WebVTT and SubRip are understood.
+  `subs` are fetched under the same rules as the media; WebVTT, SubRip and ASS/SSA (text only) are understood.
 
 ## 4c. Sleep
 

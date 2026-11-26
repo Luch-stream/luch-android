@@ -204,6 +204,66 @@ final class MediaLink {
         return out.toString();
     }
 
+    /**
+     * ASS/SSA subtitles (the anime sites' kind) as SubRip: the Dialogue lines of [Events] by their Start, End and
+     * Text columns; styling overrides ({\\...}) dropped, \\N made a line break. Positions and karaoke are lost.
+     */
+    static String assToSrt(String ass) {
+        String[] lines = ass.replace("\r\n", "\n").replace('\r', '\n').split("\n");
+        String[] format = null;
+        java.util.List<String[]> cues = new java.util.ArrayList<>();
+        boolean events = false;
+        for (String raw : lines) {
+            String line = raw.trim();
+            if (line.startsWith("[")) {
+                events = line.equalsIgnoreCase("[Events]");
+                continue;
+            }
+            if (!events) continue;
+            if (line.regionMatches(true, 0, "Format:", 0, 7)) {
+                format = line.substring(7).split(",");
+                for (int i = 0; i < format.length; i++) format[i] = format[i].trim().toLowerCase(Locale.ROOT);
+                continue;
+            }
+            if (!line.regionMatches(true, 0, "Dialogue:", 0, 9) || format == null) continue;
+            String[] f = line.substring(9).split(",", format.length);
+            if (f.length < format.length) continue;
+            String start = null, end = null, text = null;
+            for (int i = 0; i < format.length; i++) {
+                if (format[i].equals("start")) start = f[i].trim();
+                else if (format[i].equals("end")) end = f[i].trim();
+                else if (format[i].equals("text")) text = f[i];
+            }
+            String a = assTime(start), b = assTime(end);
+            if (a == null || b == null || text == null) continue;
+            text = text.replaceAll("\\{[^}]*\\}", "").replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ").trim();
+            if (!text.isEmpty()) cues.add(new String[]{a, b, text});
+        }
+        cues.sort((x, y) -> x[0].compareTo(y[0]));
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < cues.size(); i++) {
+            out.append(i + 1).append('\n').append(cues.get(i)[0]).append(" --> ").append(cues.get(i)[1]).append('\n')
+                    .append(cues.get(i)[2]).append("\n\n");
+        }
+        return out.toString();
+    }
+
+    /** ASS "0:01:02.50" (centiseconds) as "00:01:02,500". */
+    static String assTime(String t) {
+        if (t == null) return null;
+        String[] p = t.split(":");
+        if (p.length != 3) return null;
+        try {
+            int h = Integer.parseInt(p[0].trim()), m = Integer.parseInt(p[1].trim());
+            String[] sc = p[2].split("\\.");
+            int sec = Integer.parseInt(sc[0].trim());
+            int ms = sc.length > 1 ? Integer.parseInt((sc[1].trim() + "000").substring(0, 3)) : 0;
+            return String.format(Locale.ROOT, "%02d:%02d:%02d,%03d", h, m, sec, ms);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     /** "01:02.500" or "1:01:02.500" as "00:01:02,500"; null if it is not a time. */
     static String time(String t) {
         String[] p = t.split(":");

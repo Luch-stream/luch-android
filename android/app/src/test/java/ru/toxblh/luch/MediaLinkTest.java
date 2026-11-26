@@ -149,4 +149,14 @@ public class MediaLinkTest {
         assertEquals("02:03:04,050", MediaLink.time("2:03:04.050"));
         assertNull(MediaLink.time("soon"));
     }
+
+    @Test
+    public void assBecomesSubRip() {
+        String ass = "[Script Info]\nTitle: x\n\n[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n"
+                + "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+                + "Dialogue: 0,0:00:05.00,0:00:07.50,Default,,0,0,0,,{\\i1}Second{\\i0}, with a comma\\Nline two\n"
+                + "Dialogue: 0,0:00:01.20,0:00:03.00,Default,,0,0,0,,First\n";
+        assertEquals("1\n00:00:01,200 --> 00:00:03,000\nFirst\n\n"
+                + "2\n00:00:05,000 --> 00:00:07,500\nSecond, with a comma\nline two\n\n", MediaLink.assToSrt(ass));
+    }
 }

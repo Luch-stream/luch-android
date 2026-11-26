@@ -72,7 +72,8 @@ final class MediaCast {
         MediaCast old = current;
         current = m;
         if (old != null) {
-            old.control.send(PhotoSession.stop("replaced"));
+            // Another sender took over: it is told. The same sender (another quality, from the same moment) is not.
+            if (old.control != control) old.control.send(PhotoSession.stop("replaced"));
             MediaActivity a = old.player;
             if (a != null) a.runOnUiThread(() -> a.take(m));
         }

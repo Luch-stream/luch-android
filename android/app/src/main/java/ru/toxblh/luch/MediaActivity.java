@@ -282,8 +282,10 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
                     boolean vtt = text.startsWith("WEBVTT")
                             || "text/vtt".equals(s.optString("mime"));
                     File f = new File(getCacheDir(), "sub" + i + ".srt");
+                    boolean ass = text.contains("[Events]") && text.contains("Dialogue:");
+                    String srt = ass ? MediaLink.assToSrt(text) : vtt ? MediaLink.vttToSrt(text) : text;
                     try (FileOutputStream out = new FileOutputStream(f)) {
-                        out.write((vtt ? MediaLink.vttToSrt(text) : text).getBytes(StandardCharsets.UTF_8));
+                        out.write(srt.getBytes(StandardCharsets.UTF_8));
                     }
                     String label = s.optString("label", s.optString("lang", "#" + (i + 1)));
                     files.add(new String[]{f.getPath(), s.optString("id", "s" + i), label});

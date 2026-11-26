@@ -116,16 +116,18 @@ public class RemoteControlTest {
         JSONObject before = Remote.volume(context);
         if (before == null) return; // a TV that keeps its volume to itself: nothing to check
         try {
-            // Quiet: never above 5 % on a real TV (someone may be asleep next to it).
+            // Quiet: never above 5 % on a real TV (someone may be asleep next to it), or one step where a step is more.
+            android.media.AudioManager am = (android.media.AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+            int quiet = Math.max(5, Remote.percent(1, am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)));
             sender.send(new JSONObject().put("t", "volume").put("level", 2));
             JSONObject v = until("volume", 3_000);
-            assertTrue(v.toString(), v.getInt("level") > 0 && v.getInt("level") <= 5);
+            assertTrue(v.toString(), v.getInt("level") > 0 && v.getInt("level") <= quiet);
             sender.send(new JSONObject().put("t", "volume").put("level", 0));
             JSONObject zero = until("volume", 3_000);
             assertEquals(0, zero.getInt("level"));
             sender.send(new JSONObject().put("t", "volume").put("step", 1));
             JSONObject up = until("volume", 3_000);
-            assertTrue(up.toString(), up.getInt("level") > 0 && up.getInt("level") <= 5);
+            assertTrue(up.toString(), up.getInt("level") > 0 && up.getInt("level") <= quiet);
         } finally {
             sender.send(new JSONObject().put("t", "volume").put("level", Math.min(5, before.getInt("level")))
                     .put("muted", before.optBoolean("muted")));
