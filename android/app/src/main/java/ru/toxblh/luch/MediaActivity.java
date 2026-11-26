@@ -51,7 +51,7 @@ import java.util.Map;
  */
 public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     static final float[] RATES = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f};
-    private static final long REPORT_MS = 5000, OSD_MS = 3000;
+    private static final long REPORT_MS = 5000, OSD_MS = 3000, LOAD_MS = 30_000;
     private static final int MAX_SUB_BYTES = 2 * 1024 * 1024;
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -86,6 +86,10 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             if ("playing".equals(state)) report(null);
             main.postDelayed(this, REPORT_MS);
         }
+    };
+    /** A link that never answers would leave "loading" up for ever. */
+    private final Runnable loadTimeout = () -> {
+        if ("loading".equals(state) && !prepared) fail("did not load in " + LOAD_MS / 1000 + " s");
     };
     private final Runnable hideOsd = () -> {
         if (seekTarget < 0 && "playing".equals(state)) osd.animate().alpha(0f).setDuration(300).start();
@@ -187,7 +191,10 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         subtitle.setText("");
         state = "loading";
         lastBy = "sender";
+        report(null);
         showOsd();
+        main.removeCallbacks(loadTimeout);
+        main.postDelayed(loadTimeout, LOAD_MS);
         if (surfaceReady) open();
         for (JSONObject c : m.attach(this)) command(c, "sender");
     }

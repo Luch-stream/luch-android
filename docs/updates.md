@@ -48,8 +48,9 @@ Failures worth knowing about (a digest or key mismatch, the installer refusing) 
 
 ## Trying an update on an emulator
 
-Debug builds read a release feed of one's own from `files/update-url`, and allow plain HTTP to `127.0.0.1` and to
-`10.0.2.2` (the computer running the emulator); release builds always ask GitHub over HTTPS.
+Debug builds read a release feed of one's own from `files/update-url`, which may be plain HTTP (`127.0.0.1`, or
+`10.0.2.2`: the computer running the emulator); release builds fetch the feed and the APK over HTTPS only. (The app
+as a whole allows plain HTTP, for media from a sender on the local network; the updater checks for HTTPS itself.)
 
 ```sh
 cd android

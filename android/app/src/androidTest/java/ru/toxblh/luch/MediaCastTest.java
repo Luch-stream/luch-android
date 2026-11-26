@@ -130,6 +130,7 @@ public class MediaCastTest {
     public void playsAndFollowsTheSender() throws Exception {
         sender.send(media());
         until(m -> m.optString("t").equals("media_ready"), 5_000, "media_ready");
+        state(m -> m.optString("state").equals("loading"), "loading said at once");
         JSONObject playing = state(m -> m.optString("state").equals("playing"), "playing");
         assertEquals("the source that fits the screen", 480, playing.optInt("w", 480));
         assertFalse(http.requests.contains("huge.mp4"));

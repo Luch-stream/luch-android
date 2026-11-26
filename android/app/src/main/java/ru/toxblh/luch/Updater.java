@@ -338,6 +338,9 @@ final class Updater {
     }
 
     private static HttpURLConnection open(String url) throws IOException {
+        // The app allows plain HTTP (media from senders on the local network): updates insist on HTTPS themselves,
+        // except for a debug build's own test feed.
+        if (!BuildConfig.DEBUG && !url.startsWith("https://")) throw new IOException("not https: " + url);
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(TIMEOUT_MS);
         c.setReadTimeout(TIMEOUT_MS);
