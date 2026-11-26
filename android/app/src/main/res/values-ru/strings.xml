@@ -102,6 +102,7 @@
     <string name="qr_tap">Нажмите, чтобы показать QR-код</string>
     <string name="qr_scan">Наведите камеру другого устройства</string>
     <string name="qr_back">Нажмите, чтобы вернуться</string>
+    <string name="now_playing_sound">Звук с компьютера</string>
     <string name="media_loading">Загрузка…</string>
     <string name="media_failed">Не удалось воспроизвести видео</string>
     <string name="media_paused">Пауза</string>

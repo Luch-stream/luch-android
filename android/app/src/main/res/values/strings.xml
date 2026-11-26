@@ -103,6 +103,7 @@
     <string name="qr_tap">Tap to show the QR code</string>
     <string name="qr_scan">Scan with the camera of another device</string>
     <string name="qr_back">Tap to turn back</string>
+    <string name="now_playing_sound">Sound from the computer</string>
     <string name="media_loading">Loading…</string>
     <string name="media_failed">Could not play this video</string>
     <string name="media_paused">Paused</string>

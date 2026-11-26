@@ -105,8 +105,9 @@ final class Luch {
     /** The name people gave the TV in its settings, else the model. */
     static String name(Context context) {
         String own = customName(context);
-        if (!own.isEmpty()) return own;
-        return systemName(context);
+        String name = own.isEmpty() ? systemName(context) : own;
+        // A -PluchDev build next to a release on the same TV: the two must not look alike to a sender.
+        return context.getPackageName().endsWith(".dev") ? name + " (dev)" : name;
     }
 
     /** What the person typed in the app, empty when nothing. */

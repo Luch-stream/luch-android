@@ -173,6 +173,61 @@ receiver → {"t":"sleeping"}               then the TV goes to standby, as with
 `welcome` carries `"sleep"`: `"on"` (works), `"off"` (the person has not turned it on: Android lets an app put the
 screen to sleep only through an accessibility service, which the receiver asks for once) or `"no"` (before Android 9).
 
+## 4d. Sound only, now playing and media keys
+
+A sender plays its sound on the receiver like a speaker: `start` with `"mode":"audio"` and an `audio` block, no
+`video` (section 4). The receiver lists `"audio"` in `modes` when it can, answers `ready` as usual (`video_port` may
+be ignored) and shows what plays instead of a picture, or nothing at all on a device without a screen.
+
+```
+sender   → {"t":"now_playing","title":"...","artist":"...","album":"...","app":"Spotify","art":"<sender link>",
+            "state":"playing"|"paused"|"stopped","pos":12.5,"dur":215.0,"can":["play_pause","next","previous","seek"]}
+receiver → {"t":"media_key","key":"play_pause"|"play"|"pause"|"next"|"previous"|"seek_forward"|"seek_back"|"stop"}
+```
+
+- `now_playing` may come at any time while a session runs (sound only or mirroring), whenever the sender's player
+  changes; every field may be left out. `art` follows the photo rules (section 4a: a link on the sender).
+- `media_key`: what the remote asks for when the sender's player is the one to obey: the media keys during any
+  session, and in sound only also OK (play_pause) and left/right (previous/next). A sender passes it to its own
+  player (MPRIS on Linux) and sends a fresh `now_playing`. The receiver never sends it while it plays `media` itself:
+  then its own player obeys.
+
+## 4e. Volume
+
+```
+sender   → {"t":"volume","level":0..100}  or {"t":"volume","step":1|-1}  or {"t":"volume","muted":true|false}
+receiver → {"t":"volume","level":N,"muted":B}         its music volume now: after a change from either side
+```
+
+`welcome` carries the same `"volume":{"level":N,"muted":B}` when the receiver lets apps set its volume, and leaves it
+out when it does not (some TVs keep the volume in the amplifier, out of Android's reach).
+
+## 4f. The TV's own apps
+
+Some links play better in the TV's own app than as a stream: the app has the person's account, and the site hides
+its stream from a browser. The receiver lists the apps it knows and has in `welcome` as `"apps":["youtube"]`.
+
+```
+sender   → {"t":"open_app","app":"youtube","id":"<video id>","start":<s>}
+receiver → {"t":"app_opened","app":"youtube"}   or {"t":"error","code":"no_app","for":"open_app"}
+```
+
+`youtube`: `id` is the video id (`v=` of a watch link, the path of a youtu.be link). The app then plays on its own,
+outside Luch: there is no `media_state` for it.
+
+## 4g. Documents
+
+```
+sender   → {"t":"doc","url":"<sender link>","mime":"application/pdf","name":"...","page":0}
+receiver → {"t":"doc_ready","pages":N}    or {"t":"error","code":"doc_failed"|"busy","for":"doc","detail":"..."}
+either   → {"t":"doc_page","page":n}      the receiver after every turn of a page, the sender to turn one
+either   → {"t":"stop"}
+```
+
+PDF only: a sender turns other documents (text, office files, code) into PDF first. The link follows the photo
+rules (section 4a). The receiver draws each page sharp at its own resolution. On the TV, left/right turn the page,
+OK switches between the whole page and the page's width (then up/down scroll), Back stops.
+
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 
 `welcome` also carries:

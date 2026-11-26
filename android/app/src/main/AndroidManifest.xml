@@ -28,6 +28,10 @@
         <intent>
             <action android:name="android.settings.ACCESSIBILITY_SETTINGS" />
         </intent>
+        <!-- The TV's own apps a sender may open (PROTOCOL.md 4f). -->
+        <package android:name="com.google.android.youtube.tv" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.google.android.apps.youtube.unplugged" />
     </queries>
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -124,6 +128,24 @@
         <!-- A video or a sound from a sender, played here in its own quality (PROTOCOL.md, section 4b). -->
         <activity
             android:name=".MediaActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <!-- Sound only from a sender (PROTOCOL.md 4d): what plays, instead of a picture. -->
+        <activity
+            android:name=".NowPlayingActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <!-- A PDF from a sender (4g). -->
+        <activity
+            android:name=".DocActivity"
             android:exported="false"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"

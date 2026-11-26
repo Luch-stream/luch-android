@@ -186,7 +186,11 @@ final class MirrorSession {
         audioFrameMs = a == null ? 5 : a.optInt("frame_ms", 5);
         audioSync = a != null && a.optBoolean("sync", false);
         senderApp = start.optString("_app"); // put there by the control server from the sender's hello
+        audioOnly = "audio".equals(start.optString("mode"));
     }
+
+    /** Sound only (PROTOCOL.md 4d): no picture, the "now playing" screen instead of the mirror's. */
+    final boolean audioOnly;
 
     /** Opens both sockets and the screen; returns {video port, audio port}. */
     static synchronized int[] start(Context context, Control control, JSONObject msg) throws IOException {
@@ -201,10 +205,11 @@ final class MirrorSession {
         current = s;
         broadcast(context, true, false);
         wakeScreen(context);
-        thread(s::videoLoop, "luch-video");
+        if (!s.audioOnly) thread(s::videoLoop, "luch-video");
         if (s.audioRate > 0) thread(s::audioLoop, "luch-audio");
         thread(s::statsLoop, "luch-stats");
-        showScreen(context);
+        if (s.audioOnly) NowPlayingActivity.show(context);
+        else showScreen(context);
         return new int[]{s.videoSocket.getLocalPort(), s.audioSocket.getLocalPort()};
     }
 
@@ -836,7 +841,7 @@ final class MirrorSession {
             SystemClock.sleep(1000);
             // The system may refuse to open the screen for a while: for 5 s after Home on older Android, or without
             // the "display over other apps" permission. Ask again each second, then give up saying why.
-            if (surface == null && !MirrorActivity.isShown() && !ended) {
+            if (!audioOnly && surface == null && !MirrorActivity.isShown() && !ended) {
                 if (++tries == 2 && !offered) offered = postOffer();
                 if (tries > (offered ? OFFER_TRIES : SHOW_TRIES)) {
                     end(SCREEN_NOT_SHOWN);
@@ -925,7 +930,10 @@ final class MirrorSession {
                 + framesRendered + " dropped=" + framesDropped + " lost=" + framesLost + " decoder=" + decoderName);
         broadcast(context, false, false);
         // Only close the screen when nothing newer took over: on a codec switch the picture stays up.
-        if (!replaced) MirrorActivity.sessionEnded();
+        if (!replaced) {
+            MirrorActivity.sessionEnded();
+            NowPlayingActivity.sessionEnded();
+        }
     }
 
     /** Keeps a report of a failure the person will have noticed, with what the session was doing (Reports). */

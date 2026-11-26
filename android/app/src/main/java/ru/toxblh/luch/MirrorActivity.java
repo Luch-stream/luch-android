@@ -496,6 +496,17 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         prefs().edit().putBoolean("stats", statsOn).apply();
     }
 
+    /** The remote's media keys go to the sender's player (PROTOCOL.md 4d). */
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        String key = Remote.mediaKey(keyCode);
+        if (key != null) {
+            if (event.getRepeatCount() == 0) Remote.sendKey(key);
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {

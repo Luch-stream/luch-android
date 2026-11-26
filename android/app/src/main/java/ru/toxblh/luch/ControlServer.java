@@ -62,6 +62,7 @@ final class ControlServer {
             return -1;
         }
         running = true;
+        watchVolume();
         Thread accept = new Thread(this::acceptLoop, "luch-accept");
         accept.setDaemon(true);
         accept.start();
@@ -181,7 +182,12 @@ final class ControlServer {
                             send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "start"));
                             break;
                         }
-                        if (!"mirror".equals(msg.optString("mode"))) {
+                        if ("audio".equals(msg.optString("mode")) && msg.optJSONObject("audio") == null) {
+                            send(out, new JSONObject().put("t", "error").put("code", "start_failed")
+                                    .put("detail", "mode audio needs an audio block"));
+                            break;
+                        }
+                        if (!"mirror".equals(msg.optString("mode")) && !"audio".equals(msg.optString("mode"))) {
                             send(out, new JSONObject().put("t", "error").put("code", "start_failed")
                                     .put("detail", "mode " + msg.optString("mode") + " not supported"));
                             break;
@@ -230,10 +236,60 @@ final class ControlServer {
                     case "media_cmd":
                         MediaCast.command(control, msg);
                         break;
+                    case "now_playing": {
+                        MirrorSession m = MirrorSession.current;
+                        if (m == null || m.control != control) break; // only the sender of the running session
+                        String art = msg.optString("art");
+                        if (!art.isEmpty()) {
+                            try {
+                                MediaLink.check(art, address, false, MediaLink.SYSTEM_DNS);
+                            } catch (MediaLink.BadLink bad) {
+                                msg.remove("art");
+                            }
+                        }
+                        Remote.nowPlaying(msg);
+                        break;
+                    }
+                    case "volume": {
+                        JSONObject v = Remote.setVolume(context, msg);
+                        if (v == null) {
+                            send(out, new JSONObject().put("t", "error").put("code", "no_volume").put("for", "volume"));
+                        } else {
+                            broadcastVolume(v);
+                        }
+                        break;
+                    }
+                    case "open_app": {
+                        String err = Remote.openApp(context, msg);
+                        if (err == null) {
+                            send(out, new JSONObject().put("t", "app_opened").put("app", msg.optString("app")));
+                        } else {
+                            send(out, new JSONObject().put("t", "error").put("code", err).put("for", "open_app"));
+                        }
+                        break;
+                    }
+                    case "doc":
+                        if (Sender.active() || MirrorSession.current != null) {
+                            send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "doc"));
+                            break;
+                        }
+                        try {
+                            PhotoSession.closeFrom(control);
+                            MediaCast.closeFrom(control);
+                            DocActivity.open(context, control, address, msg);
+                        } catch (MediaLink.BadLink e) {
+                            send(out, new JSONObject().put("t", "error").put("code", "bad_link").put("for", "doc")
+                                    .put("detail", e.getMessage()));
+                        }
+                        break;
+                    case "doc_page":
+                        DocActivity.turnTo(control, msg.optInt("page"));
+                        break;
                     case "stop":
                         MirrorSession.stopFromSender(control);
                         PhotoSession.closeFrom(control);
                         MediaCast.closeFrom(control);
+                        DocActivity.closeFrom(control);
                         break;
                     case "bench": {
                         // Takes the hardware decoders for a few seconds: not while mirroring or already measuring.
@@ -281,10 +337,42 @@ final class ControlServer {
                 MirrorSession.stopFromSender(control);
                 PhotoSession.closeFrom(control);
                 MediaCast.closeFrom(control);
+                DocActivity.closeFrom(control);
             }
             if (peerId != null) Luch.disconnected(peerId);
         }
     }
+
+    /** The volume, after a change from a sender or from the remote, to every connected sender. */
+    static void broadcastVolume(JSONObject v) {
+        try {
+            JSONObject msg = new JSONObject(v.toString()).put("t", "volume");
+            for (MirrorSession.Control c : SENDERS) c.send(msg);
+        } catch (JSONException ignored) {
+        }
+    }
+
+    /** Volume changes made with the remote, passed on (at most every 200 ms, the bar sends many). */
+    private void watchVolume() {
+        volumeTell = () -> {
+            JSONObject v = Remote.volume(context);
+            if (v != null && !SENDERS.isEmpty()) broadcastVolume(v);
+        };
+        android.content.BroadcastReceiver r = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, android.content.Intent i) {
+                if (i.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1) != android.media.AudioManager.STREAM_MUSIC) return;
+                main.removeCallbacks(volumeTell);
+                main.postDelayed(volumeTell, 200);
+            }
+        };
+        android.content.IntentFilter f = new android.content.IntentFilter("android.media.VOLUME_CHANGED_ACTION");
+        f.addAction("android.media.STREAM_MUTE_CHANGED_ACTION");
+        if (android.os.Build.VERSION.SDK_INT >= 33) context.registerReceiver(r, f, Context.RECEIVER_NOT_EXPORTED);
+        else context.registerReceiver(r, f);
+    }
+
+    private Runnable volumeTell;
 
     /** A finished bench goes to every connected sender. */
     static void broadcastBench(JSONObject result) {
@@ -304,11 +392,15 @@ final class ControlServer {
                 .put("model", Luch.model())
                 .put("decoders", new JSONArray(Luch.decoders()))
                 .put("max", Luch.maxSize())
-                .put("modes", new JSONArray().put("mirror").put("photo").put("media"))
+                .put("modes", new JSONArray().put("mirror").put("photo").put("media").put("audio").put("doc"))
+                // The TV's own apps it can open with a link (PROTOCOL.md, section 4f).
+                .put("apps", Remote.apps(context))
                 // What "media" plays here (PROTOCOL.md, section 4b).
                 .put("media_types", new JSONArray(java.util.Arrays.asList(MediaLink.TYPES)))
                 // Whether {"t":"sleep"} works here: "on", "off" (not turned on in Accessibility), "no" (Android < 9).
                 .put("sleep", SleepService.state(context))
+                // The music volume, when apps may set it (4e).
+                .put("volume", Remote.volume(context) == null ? JSONObject.NULL : Remote.volume(context))
                 // Android version, and what works worse on it than on 8.0+ (PROTOCOL.md, section 5).
                 .put("sdk", android.os.Build.VERSION.SDK_INT)
                 .put("limits", Caps.limits())
