@@ -112,8 +112,7 @@ public class DocActivity extends Activity {
         scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         image = new ImageView(this);
-        image.setAdjustViewBounds(true);
-        image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        image.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
         scroll.addView(image, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(scroll, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         badge = Ui.text(this, "", 16, Ui.TEXT, false);
@@ -259,7 +258,12 @@ public class DocActivity extends Activity {
             return;
         }
         image.setImageBitmap(bmp);
-        image.setScaleType(byWidth ? ImageView.ScaleType.FIT_START : ImageView.ScaleType.FIT_CENTER);
+        // The whole page: centred in the screen. By its width: as tall as it is, scrolled. Drawn at the size it is
+        // shown at, never stretched afterwards.
+        image.setAdjustViewBounds(byWidth);
+        image.setScaleType(byWidth ? ImageView.ScaleType.FIT_START : ImageView.ScaleType.CENTER_INSIDE);
+        image.setLayoutParams(new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                byWidth ? ViewGroup.LayoutParams.WRAP_CONTENT : ViewGroup.LayoutParams.MATCH_PARENT));
         scroll.scrollTo(0, 0);
         badge.setText((p + 1) + " / " + r.getPageCount());
         badge.animate().cancel();

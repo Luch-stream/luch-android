@@ -116,14 +116,19 @@ public class RemoteControlTest {
         JSONObject before = Remote.volume(context);
         if (before == null) return; // a TV that keeps its volume to itself: nothing to check
         try {
-            sender.send(new JSONObject().put("t", "volume").put("level", 20));
+            // Quiet: never above 5 % on a real TV (someone may be asleep next to it).
+            sender.send(new JSONObject().put("t", "volume").put("level", 2));
             JSONObject v = until("volume", 3_000);
-            assertEquals(20, v.getInt("level"), 8);
+            assertTrue(v.toString(), v.getInt("level") > 0 && v.getInt("level") <= 5);
+            sender.send(new JSONObject().put("t", "volume").put("level", 0));
+            JSONObject zero = until("volume", 3_000);
+            assertEquals(0, zero.getInt("level"));
             sender.send(new JSONObject().put("t", "volume").put("step", 1));
             JSONObject up = until("volume", 3_000);
-            assertTrue(up.toString(), up.getInt("level") > v.getInt("level"));
+            assertTrue(up.toString(), up.getInt("level") > 0 && up.getInt("level") <= 5);
         } finally {
-            sender.send(new JSONObject().put("t", "volume").put("level", before.getInt("level")));
+            sender.send(new JSONObject().put("t", "volume").put("level", Math.min(5, before.getInt("level")))
+                    .put("muted", before.optBoolean("muted")));
             until("volume", 3_000);
         }
     }
@@ -135,7 +140,10 @@ public class RemoteControlTest {
         sender.send(new JSONObject().put("t", "open_app").put("app", "youtube").put("id", "x\"; rm -rf /"));
         JSONObject e = until("error", 3_000);
         assertTrue(e.toString(), e.getString("code").equals("bad_id") || e.getString("code").equals("no_app"));
-        if (welcome.getJSONArray("apps").toString().contains("youtube")) {
+        // Opening the app plays sound: only where nobody hears it (an emulator) or when asked for.
+        boolean quietDevice = android.os.Build.FINGERPRINT.contains("generic") || android.os.Build.MODEL.contains("sdk")
+                || "true".equals(InstrumentationRegistry.getArguments().getString("luchLoud"));
+        if (quietDevice && welcome.getJSONArray("apps").toString().contains("youtube")) {
             sender.send(new JSONObject().put("t", "open_app").put("app", "youtube").put("id", "aqz-KE-bpKQ").put("start", 30));
             assertEquals("youtube", until("app_opened", 5_000).getString("app"));
             SystemClock.sleep(3000);
