@@ -21,7 +21,10 @@ final class Luch {
     static final String TYPE_RECEIVER = "_luch._tcp";
     static final String TYPE_SENDER = "_luchsrc._tcp";
     static final int PORT = 47800;
+    /** The plain port's protocol (PROTOCOL.md): what the TXT "v" says and what older senders speak. */
     static final int VERSION = 0;
+    /** The TLS port's: pairing, pinned certificates and sealed media (PROTOCOL.md, section 3a). */
+    static final int VERSION_TLS = 1;
 
     /** A sender, connected or only announced. */
     static final class Peer {

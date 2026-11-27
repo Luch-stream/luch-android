@@ -125,4 +125,15 @@
     <string name="share_photo_label">Luch: photos only</string>
     <string name="sound_android10">Android 10 or newer</string>
     <string name="hot_badge">🔥 hot — lower the quality</string>
+    <!-- Pairing (PROTOCOL.md, section 3a): the card in the corner of the TV. -->
+    <string name="pair_title">%s wants to connect</string>
+    <string name="pair_ask">Allow %s to show things on this TV? A code to type on it comes next.</string>
+    <string name="pair_type_code">Type this code on %s:</string>
+    <string name="pair_unencrypted">%s runs an older Luch without encryption. Let it in this time?</string>
+    <string name="pair_allow">Allow</string>
+    <string name="pair_deny">Deny</string>
+    <string name="pair_channel">Connection requests</string>
+    <string name="toast_paired">Luch: paired with %s</string>
+    <string name="setting_guest">Guest mode: forget computers at standby</string>
+    <string name="setting_paired">Forget paired computers (%d)</string>
 </resources>

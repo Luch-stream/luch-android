@@ -42,6 +42,7 @@ final class Compat {
         else if (type == NsdManager.class) name = Context.NSD_SERVICE;
         else if (type == PowerManager.class) name = Context.POWER_SERVICE;
         else if (type == WifiManager.class) name = Context.WIFI_SERVICE;
+        else if (type == android.view.WindowManager.class) name = Context.WINDOW_SERVICE;
         else throw new IllegalArgumentException("no service name for " + type);
         return (T) context.getSystemService(name);
     }

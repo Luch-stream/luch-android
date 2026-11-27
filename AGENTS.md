@@ -7,7 +7,12 @@ sides together.
 ## Layout
 
 - `android/app/src/main/java/ru/toxblh/luch/`: the receiver, plain Java, no dependencies in the APK.
-  - `LuchService`: the always-on service; `ControlServer`: the TCP control port 47800.
+  - `LuchService`: the always-on service; `ControlServer`: the control ports, plain 47800 (older senders, asked
+    about every time) and TLS 47802 (pairing, PROTOCOL.md 3a).
+  - `Identity` (the TV's certificate, key in the keystore), `Pairing` (the code check), `Gate` (who is paired,
+    refusal limits, guest mode; plain logic with a test clock), `PairPrompt` (the card in the corner),
+    `MediaCrypt` (sealed frames). On-device: `PairingFlowTest` installs a `Gate` of its own; `TestSender` is a
+    paired TLS sender by default.
   - `MirrorSession`: one session (UDP video and audio, decoding); `MirrorActivity`: its screen.
   - `LowLatencyDecoder`: decoder setup; `Bench` and `Caps`: what the TV can do, sent in the welcome.
   - `Reports`: crash and error reports kept on the TV and handed to a sender that asks (PROTOCOL.md, section 6).

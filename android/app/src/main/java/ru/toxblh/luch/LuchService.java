@@ -61,11 +61,25 @@ public class LuchService extends Service {
             return;
         }
         announce(port);
+        watchStandby();
         browseSenders();
         browseReceivers();
         // After install or a firmware update there is no measurement yet: take it once things have settled.
         main.postDelayed(() -> Bench.autoRun(this, ControlServer::broadcastBench), 20_000);
         Updater.schedule(this, main);   // only in the GitHub build
+    }
+
+    private android.content.BroadcastReceiver standby;
+
+    /** In guest mode pairings end with the TV session: the screen going off is the TV going to standby. */
+    private void watchStandby() {
+        standby = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                ControlServer.gate(c).standby();
+            }
+        };
+        registerReceiver(standby, new android.content.IntentFilter(Intent.ACTION_SCREEN_OFF));
     }
 
     @Override
@@ -85,6 +99,7 @@ public class LuchService extends Service {
         } catch (RuntimeException ignored) {
         }
         if (server != null) server.stop();
+        if (standby != null) unregisterReceiver(standby);
         DeviceState.detach(this);
         super.onDestroy();
     }
@@ -134,6 +149,8 @@ public class LuchService extends Service {
         info.setAttribute("name", Luch.name(this));
         info.setAttribute("model", Luch.model());
         info.setAttribute("dec", String.join(",", shortCodecs()));
+        // "v" is the plain port's version, which every sender speaks; "tls" is where v1 with pairing is (PROTOCOL.md 1).
+        if (ControlServer.tlsPort > 0) info.setAttribute("tls", String.valueOf(ControlServer.tlsPort));
         registration = new NsdManager.RegistrationListener() {
             @Override
             public void onServiceRegistered(NsdServiceInfo s) {
