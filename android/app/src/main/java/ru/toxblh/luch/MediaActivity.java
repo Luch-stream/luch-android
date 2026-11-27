@@ -50,6 +50,7 @@ import java.util.Map;
  * controls, down or Menu opens speed, sound and subtitles, Back stops. Every change goes back as {@code media_state}.
  */
 public class MediaActivity extends Activity implements SurfaceHolder.Callback {
+    private final BackGuard backGuard = new BackGuard();
     static final float[] RATES = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f};
     private static final long REPORT_MS = 5000, OSD_MS = 3000, LOAD_MS = 30_000;
     private static final int MAX_SUB_BYTES = 2 * 1024 * 1024;
@@ -806,6 +807,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             menu.dismiss();
             return;
         }
+        if (!backGuard.confirm(this)) return;
         MediaCast m = cast;
         if (m != null) m.endedHere("back");
         cast = null;

@@ -2,6 +2,7 @@
 package ru.toxblh.luch;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -121,12 +122,17 @@ public class MirrorStartTest {
         }
     }
 
-    /** Back still ends the session at once, without the grace a stopped screen gets. */
+    /** A stray Back only warns; a second one ends the session at once, without the grace a stopped screen gets. */
     @Test
-    public void backEndsTheSessionAtOnce() throws Exception {
+    public void aSecondBackEndsTheSessionAtOnce() throws Exception {
         int port = sender.start();
         waitFor(() -> MirrorActivity.isShown(), 10_000, "mirror screen did not open");
         sender.stream(port, 1_000);
+        shell("input keyevent KEYCODE_BACK");
+        SystemClock.sleep(1_000);
+        for (JSONObject m : sender.drain()) assertFalse("one Back stops nothing", "stop".equals(m.getString("t")));
+        assertTrue("the screen stays", MirrorActivity.isShown());
+        assertNotNull("and the session", MirrorSession.current);
         shell("input keyevent KEYCODE_BACK");
         JSONObject stop = null;
         long until = SystemClock.uptimeMillis() + 500;
@@ -134,7 +140,7 @@ public class MirrorStartTest {
             for (JSONObject m : sender.drain()) if ("stop".equals(m.getString("t"))) stop = m;
             SystemClock.sleep(20);
         }
-        assertNotNull("no stop within half a second of Back", stop);
+        assertNotNull("no stop within half a second of the second Back", stop);
         assertEquals("back", stop.optString("reason"));
     }
 

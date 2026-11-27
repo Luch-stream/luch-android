@@ -41,6 +41,7 @@ import java.util.concurrent.Executors;
  * page, OK switches between the whole page and the page's width (up/down then scroll), Back stops.
  */
 public class DocActivity extends Activity {
+    private final BackGuard backGuard = new BackGuard();
     static final long MAX_BYTES = 200L * 1024 * 1024;
 
     /** What a sender asked to show; one at a time. */
@@ -328,6 +329,7 @@ public class DocActivity extends Activity {
     }
 
     private void back() {
+        if (!backGuard.confirm(this)) return;
         Doc d = current;
         if (d != null) {
             d.control.send(PhotoSession.stop("back"));

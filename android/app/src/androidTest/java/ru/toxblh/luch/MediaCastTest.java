@@ -186,6 +186,7 @@ public class MediaCastTest {
         shell("input keyevent KEYCODE_DPAD_RIGHT");
         state(m -> m.getDouble("pos") >= before + 8, "10 s on");
         shell("input keyevent KEYCODE_BACK");
+        shell("input keyevent KEYCODE_BACK"); // the first only warns (BackGuard)
         JSONObject stop = until(m -> m.optString("t").equals("stop"), 5_000, "stop");
         assertEquals("back", stop.getString("reason"));
         assertNull(MediaCast.current);

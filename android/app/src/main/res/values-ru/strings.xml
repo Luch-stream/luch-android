@@ -124,4 +124,5 @@
     <string name="share_photo_label">Луч: только фото</string>
     <string name="sound_android10">Нужен Android 10+</string>
     <string name="hot_badge">🔥 горячо — снизьте качество</string>
+    <string name="back_again_to_stop">Нажмите «Назад» ещё раз, чтобы остановить</string>
 </resources>

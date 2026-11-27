@@ -107,6 +107,7 @@ public class RemoteControlTest {
         shell("input keyevent KEYCODE_MEDIA_PREVIOUS");
         assertEquals("previous", until("media_key", 5_000).getString("key"));
         shell("input keyevent KEYCODE_BACK");
+        shell("input keyevent KEYCODE_BACK"); // the first only warns (BackGuard)
         assertEquals("back", until("stop", 5_000).getString("reason"));
         waitFor(() -> MirrorSession.current == null, 3_000, "session ended");
     }
@@ -164,6 +165,7 @@ public class RemoteControlTest {
         assertEquals(2, until("doc_page", 3_000).getInt("page"));
         shell("input keyevent KEYCODE_DPAD_RIGHT"); // the last page: nothing to turn to
         shell("input keyevent KEYCODE_BACK");
+        shell("input keyevent KEYCODE_BACK"); // the first only warns (BackGuard)
         assertEquals("back", until("stop", 5_000).getString("reason"));
         assertNull(DocActivity.current);
     }

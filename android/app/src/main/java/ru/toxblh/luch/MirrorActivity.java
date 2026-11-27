@@ -25,6 +25,7 @@ import android.widget.TextView;
  * Wi-Fi held in low-latency mode while it is up. Back ends the session; Home or another app on top only mutes it (Android 8+).
  */
 public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
+    private final BackGuard backGuard = new BackGuard();
     private static volatile MirrorActivity shown;
     /** What the picture is actually being rendered into, for the stats overlay. */
     private static volatile String surfaceInfo = "?";
@@ -443,6 +444,11 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
 
     @Override
     public void onBackPressed() {
+        if (backGuard.confirm(this)) stop();
+    }
+
+    /** Ends the session here and tells the sender. */
+    private void stop() {
         MirrorSession s = MirrorSession.current;
         if (s != null) s.stopByReceiver(MirrorSession.BY_BACK);
         finish();
@@ -484,7 +490,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             col.addView(Ui.stats(this, live), Ui.below(this, 10));
         }
         col.addView(Ui.chips(this, fitNames(), fitMode, this::setFitMode), Ui.below(this, 12));
-        android.widget.Button stop = Ui.button(this, getString(R.string.action_stop), true, v -> onBackPressed());
+        android.widget.Button stop = Ui.button(this, getString(R.string.action_stop), true, v -> stop());
         col.addView(stop, new android.widget.LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 52)));
         ((android.widget.LinearLayout.LayoutParams) stop.getLayoutParams()).topMargin = Ui.dp(this, 10);
         panel.removeAllViews();

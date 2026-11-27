@@ -125,4 +125,5 @@
     <string name="share_photo_label">Luch: photos only</string>
     <string name="sound_android10">Android 10 or newer</string>
     <string name="hot_badge">🔥 hot — lower the quality</string>
+    <string name="back_again_to_stop">Press Back again to stop</string>
 </resources>

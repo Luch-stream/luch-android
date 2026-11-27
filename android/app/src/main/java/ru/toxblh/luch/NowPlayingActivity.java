@@ -32,6 +32,7 @@ import java.net.URL;
  * ends the session.
  */
 public class NowPlayingActivity extends Activity {
+    private final BackGuard backGuard = new BackGuard();
     private static final long DIM_MS = 15_000;
     private static volatile NowPlayingActivity instance;
 
@@ -210,6 +211,7 @@ public class NowPlayingActivity extends Activity {
     }
 
     private void back() {
+        if (!backGuard.confirm(this)) return;
         MirrorSession s = MirrorSession.current;
         if (s != null) s.stopByReceiver(MirrorSession.BY_BACK);
         finish();

@@ -29,6 +29,7 @@ import java.util.concurrent.Executors;
 
 /** One photo of a {@link PhotoSession} full screen, on black, fitted; left and right on the remote (or a swipe) go to the next. */
 public class PhotoActivity extends Activity {
+    private final BackGuard backGuard = new BackGuard();
     private static final long MAX_BYTES = 80L * 1024 * 1024;
     private static final int MAX_SIDE = 4096;
     private static PhotoActivity instance;
@@ -114,6 +115,7 @@ public class PhotoActivity extends Activity {
     /** Back: tell the sender and leave. */
     @Override
     public void onBackPressed() {
+        if (!backGuard.confirm(this)) return;
         PhotoSession s = PhotoSession.current;
         if (s != null) {
             s.control.send(PhotoSession.stop("back"));
