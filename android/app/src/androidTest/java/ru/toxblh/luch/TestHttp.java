@@ -24,6 +24,8 @@ final class TestHttp implements AutoCloseable {
     private final AssetManager assets;
     final List<String> requests = new CopyOnWriteArrayList<>();
     final List<String> ranges = new CopyOnWriteArrayList<>();
+    /** Files made by a test (a PDF drawn on the device), served before the assets. */
+    private final java.util.Map<String, byte[]> made = new java.util.concurrent.ConcurrentHashMap<>();
 
     TestHttp(AssetManager assets) throws IOException {
         this.assets = assets;
@@ -50,7 +52,14 @@ final class TestHttp implements AutoCloseable {
         }
     }
 
+    /** Serves {@code body} at {@code path} from now on. */
+    void put(String path, byte[] body) {
+        made.put(path, body);
+    }
+
     private byte[] file(String path) throws IOException {
+        byte[] own = made.get(path);
+        if (own != null) return own;
         try (InputStream in = assets.open("media/" + path)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[16384];
@@ -81,7 +90,7 @@ final class TestHttp implements AutoCloseable {
                     out.flush();
                     continue;
                 }
-                String type = path.endsWith(".vtt") ? "text/vtt" : "video/mp4";
+                String type = path.endsWith(".vtt") ? "text/vtt" : path.endsWith(".pdf") ? "application/pdf" : "video/mp4";
                 int start = 0, end = body.length - 1;
                 String status = "200 OK";
                 String extra = "";

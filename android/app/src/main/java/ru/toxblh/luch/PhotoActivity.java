@@ -38,6 +38,9 @@ public class PhotoActivity extends Activity {
     private final ExecutorService loader = Executors.newSingleThreadExecutor();
     private ImageView image;
     private TextView badge, message;
+    /** The presenter's pointer and ink over the photo, one layer per photo (PROTOCOL.md 4h). */
+    private InkView ink;
+    private PhotoSession inked;
     private GestureDetector swipe;
     private int shown = -1;
     private volatile int wanted;
@@ -68,6 +71,11 @@ public class PhotoActivity extends Activity {
         message = Ui.text(this, "", 20, Ui.MUTED, false);
         root.addView(message, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
+        ink = new InkView(this, out -> InkView.imageFrame(image, ink, out), () -> {
+            PhotoSession s = PhotoSession.current;
+            return s == null ? null : s.control;
+        });
+        root.addView(ink, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         // Android 13+ calls no onBackPressed for this app (it opts into the new back handling): the sender must still
         // hear "back".
@@ -95,6 +103,7 @@ public class PhotoActivity extends Activity {
             finish();
             return;
         }
+        ink.toFront();
         show(s.index);
     }
 
@@ -155,6 +164,13 @@ public class PhotoActivity extends Activity {
         PhotoSession s = PhotoSession.current;
         if (s == null) return;
         s.index = index;
+        if (s != inked) {
+            // A new list from a sender: the ink of the last one goes with it.
+            inked = s;
+            ink.reset();
+            shown = -1;
+        }
+        ink.setPage(index);
         if (index == shown) return;
         shown = index;
         wanted = index;

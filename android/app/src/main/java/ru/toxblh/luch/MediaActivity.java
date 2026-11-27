@@ -74,6 +74,8 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
 
     private FrameLayout root;
     private SurfaceView surface;
+    /** The presenter's pointer and ink over the video (PROTOCOL.md 4h). */
+    private InkView ink;
     private TextView subtitle, message, title, time, badge;
     private Bar bar;
     private LinearLayout osd;
@@ -166,6 +168,11 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         osd.addView(choices, cp);
         root.addView(osd, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        ink = new InkView(this, out -> InkView.viewFrame(surface, ink, out), () -> {
+            MediaCast c = MediaCast.current;
+            return c == null ? null : c.control;
+        });
+        root.addView(ink, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         shown = this;
 
@@ -195,6 +202,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     void take(MediaCast m) {
         if (cast != null) cast.detach(this);
         cast = m;
+        ink.reset();
         releasePlayer();
         externalSubs.clear();
         externalLabels.clear();

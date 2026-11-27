@@ -415,7 +415,44 @@ either   → {"t":"stop"}
 
 PDF only: a sender turns other documents (text, office files, code) into PDF first. The link follows the photo
 rules (section 4a). The receiver draws each page sharp at its own resolution. On the TV, left/right turn the page,
-OK switches between the whole page and the page's width (then up/down scroll), Back stops.
+OK switches between the whole page and the page's width (then up/down scroll), Back stops. A presentation clicker
+plugged into the TV works too: Page Up/Down turn the page, B or `.` blank the screen (below), F5 and Escape (its
+start button) bring the picture back and never close the document.
+
+## 4h. Pointer, ink and a blank screen
+
+A presenter points at and draws on what is shown: a document page, a photo, a video, a mirrored screen. The
+receiver draws the pointer and the ink itself, over the picture, at its own resolution: they stay sharp on a 4K TV,
+add no encoding delay and never end up in the video. The receiver lists `"ink"` in `modes` when it can.
+
+```
+sender   → {"t":"pointer","x":0.42,"y":0.31}           the laser pointer at that point; shown if it was hidden
+sender   → {"t":"pointer","show":false}                hides it
+sender   → {"t":"ink","do":"stroke","id":7,"color":"#e53935","width":0.004,"points":[x0,y0,x1,y1,...]}
+sender   → {"t":"ink","do":"stroke","id":7,"points":[...]}   more points of stroke 7, while it is being drawn
+sender   → {"t":"ink","do":"undo"}                     takes the newest stroke away
+sender   → {"t":"ink","do":"clear"}                    takes all strokes of what is shown away
+either   → {"t":"blank","on":true|false}               the screen black (or back), as the B key of a clicker
+```
+
+- **Where.** `x` and `y` are fractions of the picture shown, from its top left corner: the PDF page, the photo, the
+  video frame, the mirrored screen; not of the TV's screen. The receiver maps them to wherever the picture is drawn
+  now (bars, a zoomed or scrolled page, a cropped mirror), so a sender never needs to know the TV's layout. Values
+  outside 0..1 are clamped. `width` is a fraction of the picture's width (0.004 is about 8 px on a 1080p screen).
+- **Ink.** `color` is `#rrggbb` or `#rrggbbaa` (a highlighter is translucent). A stroke whose `id` the receiver has
+  already got gets the new points appended; `color` and `width` are only read the first time. A stroke is drawn as it
+  arrives, so a sender sends the points of a stroke being drawn every 30 ms or so, not at its end. At most 2000
+  points per message and 20000 per stroke, 500 strokes per page; the oldest stroke goes first.
+- **Per page.** Strokes belong to the page or photo they were drawn on: turning away and back shows them again.
+  They are kept until the document, photos or session end. A video or a mirrored screen has one layer.
+- **Pointer moves** are coalesced by the sender: at most one every 16 ms (the TV's frame), always the newest
+  position and always the last one. The receiver only keeps the newest position and draws it at the next frame;
+  nothing is queued, so a slow network never makes the pointer trail behind.
+- **Blank.** The receiver covers the screen with black; the pointer and the ink are hidden too. It sends `blank`
+  back after every change, whoever made it (a clicker on the TV, or the sender). Turning the page ends it.
+- Only the sender of what is shown may point and draw; messages from others, or while nothing is shown, are ignored.
+  None of these messages is answered (they are frequent), except by an older receiver with `unknown`: a sender
+  checks `modes` for `"ink"` first.
 
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 
@@ -489,7 +526,9 @@ to file it as an issue. Sending reports to a server must stay opt-in on the send
 Reed-Solomon FEC shards (the header already has room; parity shards are made over the sealed frame); pairing with a
 code shown on the TV (done, section 3a); `media` (done, section 4b); `{"t":"photo",...}` (done, section 4a: a
 sender-served link, no inline data); `{"t":"key","code":...}` from the TV remote back to the sender (next slide,
-pause); sender-served links over HTTPS with the paired certificates.
+pause); sender-served links over HTTPS with the paired certificates; the mirrored screen's cursor drawn by the
+receiver from capture metadata (`pointer` with `"style":"cursor"` and the cursor's image, luch-linux
+`docs/presenting.md`).
 
 ## 8. Design: who may use a receiver, and why so
 
