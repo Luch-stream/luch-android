@@ -198,8 +198,12 @@ final class MirrorSession {
         audioFrameMs = a == null ? 5 : a.optInt("frame_ms", 5);
         audioSync = a != null && a.optBoolean("sync", false);
         senderApp = start.optString("_app"); // put there by the control server from the sender's hello
+        input = new InputLink(control, start.optBoolean("_input"), start.optString("_name"));
         audioOnly = "audio".equals(start.optString("mode"));
     }
+
+    /** The receiver's touch screen, keyboards, mice and gamepads for the sender (PROTOCOL.md 4i). */
+    final InputLink input;
 
     /** Sound only (PROTOCOL.md 4d): no picture, the "now playing" screen instead of the mirror's. */
     final boolean audioOnly;
@@ -223,6 +227,11 @@ final class MirrorSession {
         }
         s.videoSocket = openSocket();
         s.audioSocket = openSocket();
+        try {
+            // Input goes back from this socket (4i): DSCP EF puts it in the Wi-Fi voice queue. Received video is not touched.
+            s.videoSocket.setTrafficClass(0xB8);
+        } catch (SocketException ignored) {
+        }
         current = s;
         broadcast(context, true, false);
         wakeScreen(context);
@@ -378,6 +387,7 @@ final class MirrorSession {
                 if (first) {
                     first = false;
                     Log.i(LuchService.TAG, "video from " + p.getAddress().getHostAddress() + ":" + p.getPort());
+                    input.setPeer(videoSocket, p.getAddress(), p.getPort());
                 }
                 int n = p.getLength();
                 if (n < HEADER || (buf[0] & 0xff) != KIND_VIDEO || !from.equals(p.getAddress())) continue;
@@ -948,6 +958,7 @@ final class MirrorSession {
             }
         }
         Luch.notifyListeners();
+        input.close();
         if (videoSocket != null) videoSocket.close();
         if (audioSocket != null) audioSocket.close();
         MediaCodec d = decoder;

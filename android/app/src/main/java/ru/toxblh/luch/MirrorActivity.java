@@ -11,7 +11,10 @@ import android.os.Bundle;
 import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.view.Gravity;
+import android.os.SystemClock;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -117,6 +120,10 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
                 FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
         setContentView(root);
         statsOn = prefs().getBoolean("stats", false);
+        touchMode = prefs().getInt("touch_mode", TOUCH_DIRECT);
+        if (Build.VERSION.SDK_INT >= 26) {
+            rootView.setOnCapturedPointerListener((v, e) -> captured(e));
+        }
         stats.setVisibility(statsOn ? View.VISIBLE : View.GONE);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
@@ -356,6 +363,14 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     protected void onStop() {
         Luch.removeListener(panelListener);
         android.util.Log.i(LuchService.TAG, "mirror screen stopped, finishing=" + isFinishing());
+        InputLink link = link();
+        InputWire held = link == null ? null : link.wire();
+        if (held != null) {
+            // nothing stays pressed on the sender while the screen is away
+            held.releaseAll(SystemClock.uptimeMillis(), InputLink.now());
+            link.kick();
+            mouseButtons = 0;
+        }
         stopped = true;
         handler.removeCallbacks(closeIfStillStopped);
         MirrorSession s = MirrorSession.current;
@@ -472,16 +487,453 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         return getSharedPreferences("luch", MODE_PRIVATE);
     }
 
-    /** Without a remote (a touch screen), a tap does what OK does. */
+    /**
+     * Without a remote (a touch screen), a tap does what OK does, unless the sender may be controlled from here
+     * (PROTOCOL.md 4i): then touches go to it, and a three-finger tap brings up the panel.
+     */
     @Override
-    public boolean onTouchEvent(android.view.MotionEvent e) {
-        if (e.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+    public boolean onTouchEvent(MotionEvent e) {
+        if (isMouse(e)) {
+            if (mouse(e)) return true;
+        } else if (threeFingers(e)) {
+            return true;
+        } else {
+            InputLink link = link();
+            boolean stylus = toolOf(e, 0) != InputWire.TOOL_FINGER;
+            if (link != null && link.use(stylus ? "stylus" : "touch")) {
+                if (stylus || touchMode == TOUCH_DIRECT) direct(e);
+                else touchpad(e);
+                return true;
+            }
+            if (link != null && link.waiting()) return true;   // asked, no answer yet: the tap is not the panel's
+        }
+        if (e.getActionMasked() == MotionEvent.ACTION_UP) {
             // The black statistics in the corner go first, the next tap brings up the panel.
             if (statsOn) toggleStats();
             else togglePanel();
             return true;
         }
         return super.onTouchEvent(e);
+    }
+
+    // ---- input for the sender (PROTOCOL.md 4i) ------------------------------------------------------------------
+
+    static final int TOUCH_DIRECT = 0, TOUCH_PAD = 1;
+    /** Direct: a touch is where it is seen. Touchpad: fingers move the pointer, as on a laptop. */
+    private int touchMode;
+    private Touchpad touchpad;
+    private boolean threeDown;
+    private long threeAt;
+    private int mouseButtons;
+    private boolean captured;
+    /** Gamepads by device id: their slot in the record and what they hold. */
+    private final android.util.SparseIntArray padSlots = new android.util.SparseIntArray();
+    private final android.util.SparseArray<InputWire.Pad> pads = new android.util.SparseArray<>();
+    private final android.util.SparseIntArray padKeys = new android.util.SparseIntArray();
+    private android.hardware.input.InputManager.InputDeviceListener padListener;
+
+    private InputLink link() {
+        MirrorSession s = session;
+        return s == null || s.ended() ? null : s.input;
+    }
+
+    /** The wire to change for {@code kind}, null when its input does not go out (and then, the first time, asks). */
+    private InputWire wire(String kind) {
+        InputLink link = link();
+        return link != null && link.use(kind) ? link.wire() : null;
+    }
+
+    private void sent() {
+        InputLink link = link();
+        if (link != null) link.kick();
+    }
+
+    /** The picture's place in the window: what is seen of the video frame, bars and crop left out. */
+    private final int[] where = new int[2];
+
+    private float nx(float wx) {
+        video.getLocationInWindow(where);
+        return video.getWidth() <= 0 ? 0 : (wx - where[0]) / video.getWidth();
+    }
+
+    private float ny(float wy) {
+        video.getLocationInWindow(where);
+        return video.getHeight() <= 0 ? 0 : (wy - where[1]) / video.getHeight();
+    }
+
+    private static int toolOf(MotionEvent e, int i) {
+        switch (e.getToolType(i)) {
+            case MotionEvent.TOOL_TYPE_STYLUS: return InputWire.TOOL_STYLUS;
+            case MotionEvent.TOOL_TYPE_ERASER: return InputWire.TOOL_ERASER;
+            default: return InputWire.TOOL_FINGER;
+        }
+    }
+
+    private static boolean isMouse(MotionEvent e) {
+        return e.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE
+                || (e.getSource() & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE;
+    }
+
+    /** A three-finger tap opens the panel when touches go to the sender; the fingers are let go there. */
+    private boolean threeFingers(MotionEvent e) {
+        int action = e.getActionMasked();
+        InputLink link = link();
+        if (link == null || !link.granted()) return false;
+        if (action == MotionEvent.ACTION_POINTER_DOWN && e.getPointerCount() == 3) {
+            threeDown = true;
+            threeAt = e.getEventTime();
+            InputWire w = link.wire();
+            if (w != null) {
+                w.setContacts(java.util.Collections.emptyList(), InputLink.now());
+                if (w.buttons() != 0) w.setButtons(0, InputLink.now());
+                link.kick();
+            }
+            return true;
+        }
+        if (!threeDown) return false;
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            threeDown = false;
+            if (action == MotionEvent.ACTION_UP && e.getEventTime() - threeAt < 400) {
+                releaseCapture();
+                togglePanel();
+            }
+        }
+        return true;
+    }
+
+    /** Direct mode, and the stylus in either mode: every contact down now, where it is on the picture. */
+    private void direct(MotionEvent e) {
+        InputWire w = link().wire();
+        int action = e.getActionMasked();
+        java.util.List<InputWire.Contact> now = new java.util.ArrayList<>();
+        if (action != MotionEvent.ACTION_CANCEL && action != MotionEvent.ACTION_UP) {
+            int gone = action == MotionEvent.ACTION_POINTER_UP ? e.getActionIndex() : -1;
+            for (int i = 0; i < e.getPointerCount(); i++) {
+                if (i != gone) now.add(contact(e, i, false));
+            }
+        }
+        w.setContacts(now, InputLink.now());
+        sent();
+    }
+
+    private InputWire.Contact contact(MotionEvent e, int i, boolean hover) {
+        int tool = toolOf(e, i);
+        int pressure = 0;   // a finger's "pressure" is the size of its touch on most screens: not worth sending
+        if (tool != InputWire.TOOL_FINGER) {
+            pressure = InputWire.norm(Math.min(1f, e.getPressure(i)));
+            if (Build.VERSION.SDK_INT >= 23 && (e.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0) {
+                tool |= InputWire.TOOL_BUTTON;
+            }
+            if (hover) tool |= InputWire.TOOL_HOVER;
+        }
+        return new InputWire.Contact(e.getPointerId(i), tool, InputWire.norm(nx(e.getX(i))),
+                InputWire.norm(ny(e.getY(i))), pressure);
+    }
+
+    /** Touchpad mode: the middle of the fingers drives a {@link Touchpad}. */
+    private void touchpad(MotionEvent e) {
+        if (touchpad == null) {
+            touchpad = new Touchpad(new Touchpad.Out() {
+                @Override
+                public void moveBy(double dx, double dy) {
+                    InputWire w = link().wire();
+                    if (w != null) w.moveBy(dx, dy, InputLink.now());
+                    sent();
+                }
+
+                @Override
+                public void wheel(double dy, double dx) {
+                    InputWire w = link().wire();
+                    if (w != null) w.wheel(dy, dx, true, InputLink.now());
+                    sent();
+                }
+
+                @Override
+                public void buttons(int b) {
+                    InputLink l = link();
+                    InputWire w = l == null ? null : l.wire();
+                    if (w != null) w.setButtons(b, InputLink.now());
+                    sent();
+                }
+
+                @Override
+                public void later(Runnable r, long ms) {
+                    handler.postDelayed(r, ms);
+                }
+            }, 8 * getResources().getDisplayMetrics().density);
+        }
+        InputLink link = link();
+        MirrorSession s = session;
+        int areaW = link.areaWidth() > 0 ? link.areaWidth() : s.videoWidth();
+        touchpad.setGain(video.getWidth() > 0 ? areaW / (double) video.getWidth() : 1);
+        int action = e.getActionMasked();
+        int gone = action == MotionEvent.ACTION_POINTER_UP ? e.getActionIndex() : -1;
+        float cx = 0, cy = 0;
+        int n = 0;
+        for (int i = 0; i < e.getPointerCount(); i++) {
+            if (i == gone) continue;
+            cx += e.getX(i);
+            cy += e.getY(i);
+            n++;
+        }
+        if (n > 0) {
+            cx /= n;
+            cy /= n;
+        }
+        long t = e.getEventTime();
+        switch (action) {
+            case MotionEvent.ACTION_DOWN: touchpad.start(t, cx, cy); break;
+            case MotionEvent.ACTION_POINTER_DOWN:
+            case MotionEvent.ACTION_POINTER_UP: touchpad.fingers(t, n, cx, cy); break;
+            case MotionEvent.ACTION_MOVE: touchpad.move(t, cx, cy); break;
+            case MotionEvent.ACTION_UP: touchpad.end(t, false); break;
+            case MotionEvent.ACTION_CANCEL: touchpad.end(t, true); break;
+            default: break;
+        }
+    }
+
+    /** A mouse: captured (Android 8+), it moves the sender's pointer by its motion; else by where it points. */
+    private boolean mouse(MotionEvent e) {
+        InputWire w = wire("mouse");
+        if (w == null) return false;
+        int action = e.getActionMasked();
+        if (Build.VERSION.SDK_INT >= 26 && !captured && !panelShown()) {
+            rootView.setFocusable(true);
+            rootView.setFocusableInTouchMode(true);
+            rootView.requestFocus();
+            rootView.requestPointerCapture();
+        }
+        int now = InputLink.now();
+        if (action == MotionEvent.ACTION_SCROLL) {
+            w.wheel(-e.getAxisValue(MotionEvent.AXIS_VSCROLL) * 120, e.getAxisValue(MotionEvent.AXIS_HSCROLL) * 120, false, now);
+        } else if (action != MotionEvent.ACTION_HOVER_EXIT) {
+            w.moveTo(nx(e.getX()), ny(e.getY()), now);
+        }
+        int b = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ? 0 : e.getButtonState() & 0x1f;
+        if (b != mouseButtons) {
+            mouseButtons = b;
+            w.setButtons(b, now);
+        }
+        sent();
+        return true;
+    }
+
+    /** A captured mouse (Android 8+): relative motion, nothing of the system's pointer on the screen. */
+    private boolean captured(MotionEvent e) {
+        InputWire w = wire("mouse");
+        if (w == null) {
+            releaseCapture();
+            return false;
+        }
+        int now = InputLink.now();
+        int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_SCROLL) {
+            w.wheel(-e.getAxisValue(MotionEvent.AXIS_VSCROLL) * 120, e.getAxisValue(MotionEvent.AXIS_HSCROLL) * 120, false, now);
+        } else {
+            float dx = 0, dy = 0;
+            for (int h = 0; h < e.getHistorySize(); h++) {
+                dx += e.getHistoricalX(h);
+                dy += e.getHistoricalY(h);
+            }
+            dx += e.getX();
+            dy += e.getY();
+            if (dx != 0 || dy != 0) w.moveBy(dx, dy, now);
+        }
+        int b = e.getButtonState() & 0x1f;
+        if (b != mouseButtons) {
+            mouseButtons = b;
+            w.setButtons(b, now);
+        }
+        sent();
+        return true;
+    }
+
+    @Override
+    public void onPointerCaptureChanged(boolean hasCapture) {
+        captured = hasCapture;
+    }
+
+    private void releaseCapture() {
+        if (Build.VERSION.SDK_INT >= 26 && captured) rootView.releasePointerCapture();
+    }
+
+    private boolean panelShown() {
+        return panel.getVisibility() == View.VISIBLE;
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent e) {
+        int action = e.getActionMasked();
+        if (isJoystick(e) && action == MotionEvent.ACTION_MOVE) {
+            if (padAxes(e)) return true;
+        } else if (isMouse(e)) {
+            if (mouse(e)) return true;
+        } else if (toolOf(e, 0) != InputWire.TOOL_FINGER && (action == MotionEvent.ACTION_HOVER_ENTER
+                || action == MotionEvent.ACTION_HOVER_MOVE || action == MotionEvent.ACTION_HOVER_EXIT)) {
+            // a stylus near the screen: the sender sees where it would touch
+            InputLink link = link();
+            if (link != null && link.granted()) {
+                java.util.List<InputWire.Contact> now = new java.util.ArrayList<>();
+                if (action != MotionEvent.ACTION_HOVER_EXIT) now.add(contact(e, 0, true));
+                link.wire().setContacts(now, InputLink.now());
+                link.kick();
+                return true;
+            }
+        }
+        return super.onGenericMotionEvent(e);
+    }
+
+    private static boolean isJoystick(MotionEvent e) {
+        return (e.getSource() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+    }
+
+    /** A gamepad: a device with sticks. A remote's D-pad is not one, and stays the receiver's. */
+    private static boolean isPad(KeyEvent e) {
+        InputDevice d = e.getDevice();
+        boolean sticks = d != null && (d.getSources() & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+        return KeyEvent.isGamepadButton(e.getKeyCode()) || (sticks && KeyMap.padButton(e.getKeyCode()) >= 0);
+    }
+
+    /** Tests only: the emulator has no keyboard but the virtual one, which takes injected keys. */
+    static volatile boolean virtualIsKeyboard;
+
+    /** A real keyboard with letters on it: a remote that calls itself a keyboard has no A, Z and Space. */
+    private static boolean isKeyboard(KeyEvent e) {
+        InputDevice d = e.getDevice();
+        if (d != null && d.isVirtual() && virtualIsKeyboard) return true;
+        if (d == null || d.isVirtual() || d.getKeyboardType() != InputDevice.KEYBOARD_TYPE_ALPHABETIC) return false;
+        boolean[] has = d.hasKeys(KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_Z, KeyEvent.KEYCODE_SPACE);
+        return has[0] && has[1] && has[2];
+    }
+
+    private int padSlot(int deviceId) {
+        int slot = padSlots.get(deviceId, -1);
+        if (slot >= 0) return slot;
+        boolean[] taken = new boolean[InputWire.MAX_PADS];
+        for (int i = 0; i < padSlots.size(); i++) taken[padSlots.valueAt(i)] = true;
+        for (int i = 0; i < taken.length; i++) {
+            if (!taken[i]) {
+                padSlots.put(deviceId, i);
+                InputWire.Pad p = new InputWire.Pad();
+                p.connected = true;
+                pads.put(deviceId, p);
+                watchPads();
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private boolean padAxes(MotionEvent e) {
+        InputWire w = wire("gamepad");
+        if (w == null) return false;
+        int slot = padSlot(e.getDeviceId());
+        if (slot < 0) return false;
+        InputWire.Pad p = pads.get(e.getDeviceId());
+        p.lx = KeyMap.stick(e.getAxisValue(MotionEvent.AXIS_X));
+        p.ly = KeyMap.stick(e.getAxisValue(MotionEvent.AXIS_Y));
+        p.rx = KeyMap.stick(e.getAxisValue(MotionEvent.AXIS_Z));
+        p.ry = KeyMap.stick(e.getAxisValue(MotionEvent.AXIS_RZ));
+        p.lt = KeyMap.trigger(Math.max(e.getAxisValue(MotionEvent.AXIS_LTRIGGER), e.getAxisValue(MotionEvent.AXIS_BRAKE)));
+        p.rt = KeyMap.trigger(Math.max(e.getAxisValue(MotionEvent.AXIS_RTRIGGER), e.getAxisValue(MotionEvent.AXIS_GAS)));
+        InputDevice d = e.getDevice();
+        boolean hat = d != null && d.getMotionRange(MotionEvent.AXIS_HAT_X, e.getSource()) != null;
+        p.buttons = KeyMap.hat(padKeys.get(e.getDeviceId()), e.getAxisValue(MotionEvent.AXIS_HAT_X),
+                e.getAxisValue(MotionEvent.AXIS_HAT_Y), hat);
+        w.pad(slot, p, SystemClock.uptimeMillis(), InputLink.now());
+        sent();
+        return true;
+    }
+
+    private boolean padKey(KeyEvent e) {
+        int bit = KeyMap.padButton(e.getKeyCode());
+        if (bit < 0) return false;
+        InputWire w = wire("gamepad");
+        if (w == null) return false;
+        int slot = padSlot(e.getDeviceId());
+        if (slot < 0) return false;
+        int keys = padKeys.get(e.getDeviceId());
+        keys = e.getAction() == KeyEvent.ACTION_DOWN ? keys | 1 << bit : keys & ~(1 << bit);
+        padKeys.put(e.getDeviceId(), keys);
+        InputWire.Pad p = pads.get(e.getDeviceId());
+        p.buttons = (p.buttons & KeyMap.PAD_DPAD & ~keys) | keys;   // a hat's D-pad stays as the axes left it
+        w.pad(slot, p, SystemClock.uptimeMillis(), InputLink.now());
+        sent();
+        return true;
+    }
+
+    /** An unplugged gamepad is said to be gone, so the sender removes its own. */
+    private void watchPads() {
+        if (padListener != null) return;
+        android.hardware.input.InputManager im = Compat.service(this, android.hardware.input.InputManager.class);
+        if (im == null) return;
+        padListener = new android.hardware.input.InputManager.InputDeviceListener() {
+            @Override
+            public void onInputDeviceAdded(int id) {
+            }
+
+            @Override
+            public void onInputDeviceChanged(int id) {
+            }
+
+            @Override
+            public void onInputDeviceRemoved(int id) {
+                int slot = padSlots.get(id, -1);
+                if (slot < 0) return;
+                padSlots.delete(id);
+                padKeys.delete(id);
+                pads.remove(id);
+                InputLink link = link();
+                InputWire w = link == null ? null : link.wire();
+                if (w == null) return;
+                w.pad(slot, new InputWire.Pad(), SystemClock.uptimeMillis(), InputLink.now());
+                link.kick();
+            }
+        };
+        im.registerInputDeviceListener(padListener, handler);
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        if (e.getAction() == KeyEvent.ACTION_MULTIPLE) return super.dispatchKeyEvent(e);
+        if (isPad(e)) {
+            if (padKey(e)) return true;
+        } else if (isKeyboard(e) && !KeyMap.staysHere(e.getKeyCode())) {
+            int code = KeyMap.evdev(e.getKeyCode(), e.getScanCode());
+            InputWire w = code > 0 ? wire("keyboard") : null;
+            if (w != null) {
+                if (e.getRepeatCount() == 0) {   // the sender repeats a held key itself
+                    w.key(code, e.getAction() == KeyEvent.ACTION_DOWN, SystemClock.uptimeMillis(), InputLink.now());
+                    sent();
+                }
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(e);
+    }
+
+    private void setTouchMode(int mode) {
+        touchMode = mode;
+        prefs().edit().putInt("touch_mode", mode).apply();
+        refreshPanel();
+    }
+
+    /** What became of the sender's control from here, as a toast (any thread). */
+    static void inputChanged(String what, String sender) {
+        MirrorActivity a = shown;
+        if (a == null) return;
+        a.runOnUiThread(() -> {
+            int text;
+            switch (what) {
+                case InputLink.ASKING: text = R.string.input_asking; break;
+                case InputLink.GRANTED: text = R.string.input_granted; break;
+                case InputLink.DENIED: text = R.string.input_denied; break;
+                default: text = R.string.input_off; break;
+            }
+            if (!InputLink.GRANTED.equals(what)) a.releaseCapture();
+            android.widget.Toast.makeText(a, a.getString(text, sender), android.widget.Toast.LENGTH_SHORT).show();
+            a.refreshPanel();
+        });
     }
 
     private void togglePanel() {
@@ -504,6 +956,10 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             col.addView(Ui.stats(this, live), Ui.below(this, 10));
         }
         col.addView(Ui.chips(this, fitNames(), fitMode, this::setFitMode), Ui.below(this, 12));
+        if (s != null && s.input.senderWants && !s.input.denied()) {
+            col.addView(Ui.chips(this, new String[] {getString(R.string.touch_direct), getString(R.string.touch_pad)},
+                    touchMode, this::setTouchMode), Ui.below(this, 8));
+        }
         android.widget.Button stop = Ui.button(this, getString(R.string.action_stop), true, v -> stop());
         col.addView(stop, new android.widget.LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 52)));
         ((android.widget.LinearLayout.LayoutParams) stop.getLayoutParams()).topMargin = Ui.dp(this, 10);

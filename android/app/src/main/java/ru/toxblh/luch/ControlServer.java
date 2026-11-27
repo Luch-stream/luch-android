@@ -168,6 +168,7 @@ final class ControlServer {
         String peerId = null;
         String peerName = null;
         String peerApp = "";
+        boolean peerInput = false;
         String address = s.getInetAddress().getHostAddress();
         MirrorSession.Control control = null;
         // Let in: paired (TLS), or allowed on the TV for this connection (plain). Set from the prompt's thread.
@@ -242,6 +243,7 @@ final class ControlServer {
                         peerId = msg.optString("id", address);
                         peerName = msg.optString("name", address);
                         peerApp = msg.optString("app");
+                        peerInput = wants(msg, "input");
                         if (secure && !admit(s, in, out, fp, peerId, peerName, address)) return;
                         JSONObject w = welcome(secure);
                         if (token != null) w.put("token", token);
@@ -288,6 +290,12 @@ final class ControlServer {
                         // The sender's answer to something of ours; answering it would only bounce errors back.
                         Log.i(LuchService.TAG, "sender says: " + msg);
                         break;
+                    case "input": {
+                        // The grant for this sender's session (4i); another sender's has no say over it.
+                        MirrorSession m = MirrorSession.current;
+                        if (m != null && m.control == control) m.input.onGrant(msg);
+                        break;
+                    }
                     case "sender_stats": {
                         MirrorSession m = MirrorSession.current;
                         if (m != null && m.control == control) m.onSenderStats(msg);
@@ -310,7 +318,7 @@ final class ControlServer {
                             break;
                         }
                         try {
-                            msg.put("_app", peerApp);
+                            msg.put("_app", peerApp).put("_input", peerInput).put("_name", peerName);
                             // Over TLS the media is sealed with a key of this session, given only in the ready.
                             byte[] key = secure ? MediaCrypt.newKey() : null;
                             int[] ports = MirrorSession.start(context, control, msg, s.getInetAddress(), key);
@@ -781,6 +789,9 @@ final class ControlServer {
                 .put("limits", Caps.limits())
                 // What the hardware says it can do, and what it measured (null until the bench has run).
                 .put("hw", Caps.collect(context))
+                // What could control the sender from here (4i).
+                .put("input", Caps.input(context))
+                .put("touch_points", Caps.touchPoints(context))
                 .put("bench", Bench.cached(context) == null ? JSONObject.NULL : Bench.cached(context));
     }
 

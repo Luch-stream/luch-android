@@ -142,4 +142,10 @@
     <string name="action_say_address">Say the address by sound</string>
     <string name="sender_looking">A computer nearby is looking for a TV: this one now shows itself to it over Bluetooth.</string>
     <string name="status_no_address">No network address yet</string>
+    <string name="input_asking">Asking %s for control…</string>
+    <string name="input_granted">%s: control allowed. Three fingers bring up the panel</string>
+    <string name="input_denied">%s did not allow control</string>
+    <string name="input_off">%s took control back</string>
+    <string name="touch_direct">Touch: direct</string>
+    <string name="touch_pad">Touch: touchpad</string>
 </resources>

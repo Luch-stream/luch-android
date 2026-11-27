@@ -140,4 +140,10 @@
     <string name="action_say_address">Сказать адрес звуком</string>
     <string name="sender_looking">Компьютер рядом ищет телевизор: этот теперь виден ему по Bluetooth.</string>
     <string name="status_no_address">Сетевого адреса пока нет</string>
+    <string name="input_asking">Запрос управления у %s…</string>
+    <string name="input_granted">%s: управление разрешено. Панель — касание тремя пальцами</string>
+    <string name="input_denied">%s: управление не разрешено</string>
+    <string name="input_off">%s: управление отключено</string>
+    <string name="touch_direct">Касание: прямое</string>
+    <string name="touch_pad">Касание: тачпад</string>
 </resources>
