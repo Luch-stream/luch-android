@@ -239,7 +239,7 @@ final class MediaLink {
             text = text.replaceAll("\\{[^}]*\\}", "").replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ").trim();
             if (!text.isEmpty()) cues.add(new String[]{a, b, text});
         }
-        cues.sort((x, y) -> x[0].compareTo(y[0]));
+        java.util.Collections.sort(cues, (x, y) -> x[0].compareTo(y[0])); // List.sort is Android 7+
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < cues.size(); i++) {
             out.append(i + 1).append('\n').append(cues.get(i)[0]).append(" --> ").append(cues.get(i)[1]).append('\n')
