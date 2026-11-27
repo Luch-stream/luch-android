@@ -314,7 +314,9 @@ public class DocActivity extends Activity {
                 if (e.getRepeatCount() == 0) ink.setBlank(!ink.model.blank());
                 return true;
             case KeyEvent.KEYCODE_F5:
-                // A clicker's "start the show": the show is already on, so it only brings the picture back.
+            case KeyEvent.KEYCODE_ESCAPE:
+                // A clicker's "start the show" sends F5 and Escape in turn. The show is already on, so both only bring
+                // the picture back; Escape must not fall back to Back and close the document.
                 if (ink.model.blank()) ink.setBlank(false);
                 return true;
             case KeyEvent.KEYCODE_DPAD_CENTER:

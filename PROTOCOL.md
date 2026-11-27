@@ -227,7 +227,8 @@ either   → {"t":"stop"}
 PDF only: a sender turns other documents (text, office files, code) into PDF first. The link follows the photo
 rules (section 4a). The receiver draws each page sharp at its own resolution. On the TV, left/right turn the page,
 OK switches between the whole page and the page's width (then up/down scroll), Back stops. A presentation clicker
-plugged into the TV works too: Page Up/Down turn the page, B or `.` blank the screen (below).
+plugged into the TV works too: Page Up/Down turn the page, B or `.` blank the screen (below), F5 and Escape (its
+start button) bring the picture back and never close the document.
 
 ## 4h. Pointer, ink and a blank screen
 

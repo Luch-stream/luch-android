@@ -131,6 +131,14 @@ public class InkOverlayTest {
         assertTrue(until("blank", 3_000).getBoolean("on"));
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_F5);
         assertFalse(until("blank", 3_000).getBoolean("on"));
+        // Its start button sends F5 and Escape in turn: Escape too only brings the picture back, never leaves.
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_PERIOD);
+        assertTrue(until("blank", 3_000).getBoolean("on"));
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE);
+        assertFalse(until("blank", 3_000).getBoolean("on"));
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE);
+        SystemClock.sleep(500);
+        assertNotNull("Escape did not close the document", DocActivity.current);
 
         sender.send(new JSONObject().put("t", "ink").put("do", "undo"));
         waitPixel(page, 0.7f, 0.5f, false, "undo took the stroke away");
