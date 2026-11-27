@@ -146,6 +146,44 @@ final class TestSender {
         }
     }
 
+    /**
+     * Digital silence as the sender's Opus encoder makes it (libopus, CELT 5 ms, 128 kbit/s CBR, stereo): what a
+     * receiver decodes and plays, without a sound. Tests never send anything louder.
+     */
+    static byte[] silentOpus() {
+        byte[] p = new byte[80];
+        p[0] = (byte) 0xec;   // TOC: CELT full band, 5 ms, stereo, one frame
+        p[1] = (byte) 0xff;
+        p[2] = (byte) 0xfe;
+        return p;
+    }
+
+    /** Silent Opus frames every 5 ms to {@code port} for {@code ms}, on a thread of their own; pts on the video's clock. */
+    Thread streamSilence(int port, long ms) {
+        Thread t = new Thread(() -> {
+            byte[] f = silentOpus();
+            try (DatagramSocket udp = new DatagramSocket()) {
+                InetAddress to = InetAddress.getLoopbackAddress();
+                long start = SystemClock.uptimeMillis();
+                for (int s = 0; SystemClock.uptimeMillis() - start < ms; s++) {
+                    ByteBuffer b = ByteBuffer.allocate(MirrorSession.HEADER + f.length);
+                    b.put((byte) 2).put((byte) 0).putShort((short) 0).putShort((short) 1).putShort((short) 0)
+                            .putInt(s).putInt((int) (SystemClock.uptimeMillis() * 1000)).putInt(f.length)
+                            .putShort((short) 0).putShort((short) 0).put(f);
+                    udp.send(new DatagramPacket(b.array(), b.position(), to, port));
+                    long next = start + (s + 1) * 5L;
+                    long wait = next - SystemClock.uptimeMillis();
+                    if (wait > 0) SystemClock.sleep(wait);
+                }
+            } catch (IOException ignored) {
+                // the session ended
+            }
+        }, "test-sender-audio");
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
+
     /** The bench clip of {@link #codec} (one access unit per AUD), looped at 30 fps for {@code ms}. */
     void stream(int port, long ms) throws Exception {
         boolean hevc = codec.equals("video/hevc");

@@ -32,6 +32,8 @@ import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import ru.toxblh.luch.sync.Window;
+
 /**
  * One mirroring session, PROTOCOL.md v1, built the way moonlight-common-c and moonlight-android receive video:
  * <ul>
@@ -85,6 +87,12 @@ final class MirrorSession {
     /** Set once the audio track exists: how far behind the picture its sound comes out, and the picture's hold. */
     private volatile int audioLatencyMs;
     private volatile long videoHoldNs;
+    /**
+     * What each path really takes, for "sync" and the stats (docs: sync, phase 0): packet arrival to the ear from the
+     * track's timestamps, and decoder input to the display from the render callbacks, both without the picture's hold.
+     */
+    private final Window audioMs = new Window(2000), videoMs = new Window(600);
+    private volatile AudioOut audioOut;
     private DatagramSocket videoSocket, audioSocket;
     private volatile boolean ended;
     /** Ended because the same sender started again (it turned, or changed the size): the screen is not closed. */
@@ -119,7 +127,7 @@ final class MirrorSession {
     private long idrRequestedAt;
     private int droppedInRow;
     /** Decoder input pts (uptime µs at enqueue) → frame seq, for the stats line; written here, read by the renderer. */
-    private final long[] ptsRing = new long[64], seqRing = new long[64];
+    private final long[] ptsRing = new long[64], seqRing = new long[64], holdRing = new long[64];
     private int ringPos;
 
     // ---- counters (logged at the end and sent in stats) ----
@@ -512,6 +520,15 @@ final class MirrorSession {
             throw new IOException("no decoder for " + videoMime);
         }
         decoderName = decoder.getName();
+        if (Build.VERSION.SDK_INT >= 23) {
+            // When each frame really reached the display: decode, queue and the compositor, which the decode time
+            // alone does not show. Its pts is the local time the frame went into the decoder.
+            decoder.setOnFrameRenderedListener((codec, ptsUs, nanoTime) -> {
+                synchronized (videoMs) {
+                    videoMs.add((nanoTime / 1000 - ptsUs) / 1000.0 - holdOf(ptsUs) / 1e6);
+                }
+            }, null);
+        }
         thread(this::renderLoop, "luch-render");
         return true;
     }
@@ -538,15 +555,23 @@ final class MirrorSession {
                     framesDropped++;
                     continue;
                 }
-                codec.releaseOutputBuffer(index, System.nanoTime() + videoHoldNs);
+                long hold = videoHoldNs;
+                codec.releaseOutputBuffer(index, System.nanoTime() + hold);
                 framesRendered++;
                 long now = System.nanoTime() / 1000;
+                if (Build.VERSION.SDK_INT < 23) {
+                    // No render callback: decode time and one refresh period stand for the path to the display.
+                    synchronized (videoMs) {
+                        videoMs.add((now - pts) / 1000.0 + 1000.0 / 60);
+                    }
+                }
                 decodeUsSum += now - pts;
                 decodeCount++;
                 synchronized (ptsRing) {
                     for (int i = 0; i < ptsRing.length; i++) {
                         if (ptsRing[i] == pts) {
                             shownSeq = seqRing[i];
+                            holdRing[i] = hold;
                             break;
                         }
                     }
@@ -560,6 +585,14 @@ final class MirrorSession {
         }
     }
 
+    /** The hold a frame was released with, by its decoder pts (ns). */
+    private long holdOf(long ptsUs) {
+        synchronized (ptsRing) {
+            for (int i = 0; i < ptsRing.length; i++) if (ptsRing[i] == ptsUs) return holdRing[i];
+        }
+        return videoHoldNs;
+    }
+
     // ---- audio ---------------------------------------------------------------------------------------------
 
     private static final int AUDIO_BUFFER_STEP_MS = 10, MAX_AUDIO_BUFFER_MS = 200; // 200: a phone on Wi-Fi sends in 20 ms packets that arrive in bursts
@@ -571,10 +604,10 @@ final class MirrorSession {
         ByteBuffer h = ByteBuffer.wrap(buf).order(ByteOrder.BIG_ENDIAN);
         MediaCodec dec = null;
         AudioTrack track = null;
+        AudioOut out = null;
         long startedAt = SystemClock.uptimeMillis();
         long lastSeq = -1;
         byte[] pcm = new byte[0];
-        boolean playing = false;
         int bufMs = 0, underruns = 0;
         long checkedAt = SystemClock.uptimeMillis();
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
@@ -585,6 +618,7 @@ final class MirrorSession {
                 } catch (SocketTimeoutException quiet) {
                     continue;
                 }
+                long arrived = System.nanoTime();
                 int n = p.getLength();
                 if (n < HEADER || (buf[0] & 0xff) != KIND_AUDIO) continue;
                 int flags = buf[1] & 0xff;
@@ -596,8 +630,10 @@ final class MirrorSession {
                 if ((flags & FLAG_CONFIG) != 0) {
                     if (dec == null) {
                         dec = opusDecoder(data);
-                        track = audioTrack();
+                        out = new AudioOut(audioTrack(), audioRate, audioChannels);
+                        track = out.track;
                         activeTrack = track;
+                        audioOut = out;
                         if (awaySince != 0) track.setVolume(0f);
                         int frames;
                         if (Build.VERSION.SDK_INT >= 24) {
@@ -646,27 +682,25 @@ final class MirrorSession {
                     b.put(data);
                     dec.queueInputBuffer(in, 0, len, seq * audioFrameMs * 1000L, 0);
                 }
-                int out;
-                while ((out = dec.dequeueOutputBuffer(info, 0)) >= 0) {
-                    ByteBuffer o = dec.getOutputBuffer(out);
+                int outIndex;
+                while ((outIndex = dec.dequeueOutputBuffer(info, 0)) >= 0) {
+                    ByteBuffer o = dec.getOutputBuffer(outIndex);
                     if (info.size > 0 && o != null) {
                         if (pcm.length < info.size) pcm = new byte[info.size];
                         o.position(info.offset);
                         o.get(pcm, 0, info.size);
                         // The track holds about two frames; when it is full the rest is dropped rather than queued,
                         // so audio never drifts behind the picture.
-                        if (Build.VERSION.SDK_INT >= 23) {
-                            track.write(pcm, 0, info.size, AudioTrack.WRITE_NON_BLOCKING);
-                        } else {
-                            o.position(info.offset).limit(info.offset + info.size);   // the byte[] form is Android 6
-                            track.write(o, info.size, AudioTrack.WRITE_NON_BLOCKING);
-                        }
-                        if (!playing) {
-                            track.play();
-                            playing = true;
+                        long now = System.nanoTime();
+                        out.poll(now);
+                        long hear = out.hearNs(now);
+                        if (out.write(pcm, 0, info.size) > 0) {
+                            synchronized (audioMs) {
+                                audioMs.add((hear - arrived) / 1e6);
+                            }
                         }
                     }
-                    dec.releaseOutputBuffer(out, false);
+                    dec.releaseOutputBuffer(outIndex, false);
                 }
             }
         } catch (IOException | RuntimeException e) {
@@ -676,13 +710,8 @@ final class MirrorSession {
             }
         } finally {
             activeTrack = null;
-            if (track != null) {
-                try {
-                    track.stop();
-                } catch (RuntimeException ignored) {
-                }
-                track.release();
-            }
+            audioOut = null;
+            if (out != null) out.release();
             if (dec != null) {
                 try {
                     dec.stop();
@@ -871,6 +900,7 @@ final class MirrorSession {
             MirrorActivity.showStats(overlay(decodeMs, hostMs, count, bytes * 8 / 1e6));
             publishLive(decodeMs, hostMs, count, bytes * 8 / 1e6);
             if (count == 0) continue;
+            JSONObject outPaths = paths();
             try {
                 JSONObject s = new JSONObject().put("t", "stats")
                         .put("decode_ms", Math.round(sum / (double) count / 100.0) / 10.0)
@@ -882,6 +912,7 @@ final class MirrorSession {
                         .put("decoder", decoderName)
                         .put("audio_latency_ms", audioLatencyMs)
                         .put("video_hold_ms", videoHoldNs / 1_000_000);
+                if (outPaths != null) s.put("out", outPaths);
                 // Thermal headroom rises toward 1.0 before severe throttling, so a sender can warn early.
                 double headroom = DeviceState.headroom(context);
                 if (headroom >= 0) s.put("thermal_headroom", Math.round(headroom * 100) / 100.0);
@@ -897,6 +928,41 @@ final class MirrorSession {
             } catch (JSONException ignored) {
             }
         }
+    }
+
+    /**
+     * The true output paths of the last seconds (docs: sync, phase 0): {"audio_ms","audio_src","video_ms","route"}, or
+     * null before the first numbers. With "sync" the picture is held by what the sound takes beyond the picture: the
+     * track's mixer, HAL and DAC included, which the buffer size alone left out.
+     */
+    private JSONObject paths() {
+        double a, v;
+        synchronized (audioMs) {
+            a = audioMs.median();
+        }
+        synchronized (videoMs) {
+            v = videoMs.median();
+        }
+        AudioOut o = audioOut;
+        if (o != null && !Double.isNaN(a)) {
+            audioLatencyMs = (int) Math.round(Math.max(0, a - (Double.isNaN(v) ? 0 : v)));
+            if (audioSync && !Double.isNaN(v)) videoHoldNs = Math.round(Math.max(0, a - v) * 1e6);
+        }
+        if (Double.isNaN(a) && Double.isNaN(v)) return null;
+        try {
+            JSONObject out = new JSONObject();
+            if (!Double.isNaN(a)) out.put("audio_ms", round1(a));
+            if (o != null && o.clock.source() != null) out.put("audio_src", o.clock.source());
+            if (o != null) out.put("route", o.route());
+            if (!Double.isNaN(v)) out.put("video_ms", round1(v));
+            return out;
+        } catch (JSONException e) {
+            return null;
+        }
+    }
+
+    private static double round1(double x) {
+        return Math.round(x * 10) / 10.0;
     }
 
     /** Ends the session; {@code byReceiver} is the reason when the receiver ends it, null otherwise. */
