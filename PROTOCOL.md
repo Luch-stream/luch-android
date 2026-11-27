@@ -2,17 +2,21 @@
 
 Luch pushes a screen, a window, a video or photos from a computer (the *sender*) to a TV or projector (the
 *receiver*), the way AirPlay and Cast do: the receiver is always on and announces itself, the sender lists what it
-finds and starts a session. v0 is discovery and the control channel; v1 adds low-latency mirroring.
+finds and starts a session. v0 is discovery and the control channel in plain TCP; v1 is the same channel over TLS,
+with pairing (section 3a) and sealed media (section 4). How it is kept safe, and why so, is in section 8.
 
 ## 1. Discovery (mDNS / DNS-SD)
 
 | Who | Service type | Port | TXT |
 |---|---|---|---|
-| Receiver | `_luch._tcp` | its control port (default 47800) | `v=0`, `id=<uuid>`, `name=<display name>`, `model=<model>`, `dec=avc,hevc` |
+| Receiver | `_luch._tcp` | its plain control port (default 47800) | `v=0`, `id=<uuid>`, `name=<display name>`, `model=<model>`, `dec=avc,hevc`, `tls=<TLS port>` (default 47802) |
 | Sender | `_luchsrc._tcp` | its control port (0 = not listening; still announced so receivers can list it) | `v=0`, `id=<uuid>`, `name=<host name>` |
 
 - `id` is a random UUID made once and kept; names may change, `id` doesn't.
 - Both sides browse the other's type, so each can show who is around.
+- `v` stays `0`: it is the plain port's version, which every sender speaks (older senders skip any other `v`). `tls`
+  says that the receiver also speaks v1 there. Nothing in a TXT record is trusted: a sender that paired with a
+  receiver id trusts only that receiver's certificate under it (section 3a), whatever mDNS says.
 
 ## 2. Networks with a VPN (must work without any setting)
 
@@ -28,7 +32,8 @@ route:
 
 ## 3. Control channel
 
-TCP from sender to the receiver's port. UTF-8, one JSON object per line (`\n`), at most 64 KiB per line.
+TCP from sender to the receiver's port: TLS 1.2 or 1.3 to the `tls` port (v1), or plain TCP to the announced port
+(v0, older senders). UTF-8, one JSON object per line (`\n`), at most 64 KiB per line.
 Every message has `t` (type). Unknown fields are ignored; an unknown `t` is answered with `{"t":"error","code":"unknown","for":"<t>"}`.
 
 ```
@@ -42,8 +47,65 @@ either   → {"t":"bye"}                     then close
 - The receiver answers `hello` within 2 s or closes. `modes` lists what it can do now; v0 sends `[]`.
 - Either side pings every 10 s while idle; 30 s without any line = dead, close.
 - One sender at a time may hold a *session* later; v0 allows any number of connected senders.
-- Pairing (v1): the first `hello` from an unknown `id` gets `{"t":"pair","digits":4}`, the TV shows a code, the
-  sender answers `{"t":"pair","code":"1234"}`. Until then v0 shows nothing on screen except "<name> connected".
+- On the TLS port the receiver answers `hello` with `welcome` (`"v":1`) when the sender is paired, else with the
+  pairing of section 3a, and the `welcome` after it. On the plain port the `welcome` (`"v":0`, with `"tls_port"`)
+  comes at once, but until the person allows that connection on the TV everything but `hello`, `ping`, `pong`,
+  `bye` and `error` is answered `{"t":"error","code":"not_allowed","for":"<t>","detail":"..."}` (section 3a).
+
+## 3a. Pairing (v1)
+
+Both sides have a self-signed certificate, made once and kept: the receiver's key stays in the Android keystore, the
+sender's in its own config directory, readable only by its user. There is no CA. Each side trusts the other for
+being the certificate it *paired* with: it keeps the other's SHA-256 fingerprint (of the certificate's DER), and
+that is all it checks. The receiver asks every TLS client for its certificate; the sender checks the receiver's
+against its pin, and with no pin yet takes it only to pair.
+
+```
+sender   → {"t":"hello","v":1,...,"pair":true}         "pair": the sender has no pin for this receiver: pair even if known
+receiver → {"t":"welcome","v":1,...}                    a paired sender: in, nothing on screen
+         or {"t":"pair","step":"allow"}                 asking "allow?" on the TV first (something is playing)
+         or {"t":"pair","step":"code","digits":6}       the code is on the TV (at once when idle, or after "allow")
+         or {"t":"pair_refused","reason":R,"retry_s":N} then the connection is closed
+sender   → {"t":"pair_commit","round":i,"c":"<hex>"}    one round per digit, i = 0..5
+receiver → {"t":"pair_commit","round":i,"c":"<hex>"}
+sender   → {"t":"pair_open","round":i,"n":"<hex nonce>"}
+receiver → {"t":"pair_open","round":i,"n":"<hex nonce>"}   or pair_refused "wrong_code"
+receiver → {"t":"paired"}, then {"t":"welcome",...}
+```
+
+`R` is `denied` (Deny on the TV), `dismissed` (Back), `timeout` (nobody answered in 60 s, or no code typed in
+2 min), `wrong_code`, `banned` (`retry_s` until it is asked about again) or `busy` (another prompt is up or too many
+came lately; `retry_s`).
+
+**The code check.** The TV shows six digits; the person types them on the sender. A commitment is
+`SHA-256("luch-pair-1" | role | round | digit | nonce | sender fp | receiver fp)`: `role` is the byte `S` or `R`,
+`round` one byte, `digit` its ASCII byte, `nonce` 16 random bytes, the fingerprints 32 bytes each, as this side saw
+them in the handshake. In every round both commit before either opens, and the sender opens first; a side that finds
+the other's opening wrong stops (the receiver answers `wrong_code`). Both sides then pin. Someone in the middle shows
+each side a certificate of its own, so the fingerprints differ on its two sides: it must commit to each digit before
+it is opened to it, and gets past the six rounds once in 10^5 tries even if it learns one digit; it never gets a
+whole-code hash to try all million codes on offline (section 8).
+
+**On the TV.** A small card in the corner, over whatever plays, which nothing pauses: "Linux Laptop wants to
+connect" with the code and Deny, or Allow and Deny while a picture, a video, photos or a document is shown (a
+stranger cannot flash a code over a film; Allow then shows the code in the same card). Back closes it, which is not
+a refusal. Without the "display over other apps" permission it is a notification with the same buttons.
+
+**Limits.** A sender chooses its own `id` and key, so the receiver trusts neither alone. Refusals (Deny, a wrong
+code) count against the key and against the address: after 3 within an hour, both are not asked about for an hour
+(`banned`). One prompt at a time, and at most 5 in 10 minutes from all senders together (`busy`). At most 20
+senders are paired; the least recently used one goes. A sender pairing again under its `id` with a new key replaces
+its old key.
+
+**Home and guest.** At home (the default) pairings stay. In guest mode they last one TV session: they are
+forgotten when the TV goes to standby, and 24 hours after pairing in any case, so the next visit asks for the code
+again. The status screen switches the mode and forgets all pairings.
+
+**Older senders** (the plain port) cannot pair. Each of their connections is asked about with Allow and Deny (the
+card says the sender has no encryption); Allow lets that connection in, nothing is remembered; refusals count
+against the address as above. They get no crash reports and their media is not sealed. A sender that has paired
+with a receiver never falls back to the plain port for it: no TLS where there was TLS is refused as another device
+under that receiver's name.
 
 ## 4. Mirroring (v1)
 
@@ -52,7 +114,8 @@ Modelled on Sunshine and Moonlight: UDP, no jitter buffer, loss answered with a 
 ```
 sender   → {"t":"start","mode":"mirror","video":{"codec":"video/hevc","width":1920,"height":1080,"fps":60},
             "audio":{"codec":"audio/opus","rate":48000,"channels":2,"frame_ms":5,"sync":false}}
-receiver → {"t":"ready","video_port":P,"audio_port":Q}      or {"t":"error","code":"start_failed","detail":"..."}
+receiver → {"t":"ready","video_port":P,"audio_port":Q,       or {"t":"error","code":"start_failed","detail":"..."}
+            "crypt":"aes-128-gcm","key":"<base64, 16 bytes>"}  over TLS only: the media key of this session
 receiver → {"t":"keyframe"}                                 an IDR is needed (start, or after a loss)
 either   → {"t":"stop"} / receiver → {"t":"stop","by":"receiver","reason":"back"|"screen_closed"|"screen_not_shown"}
 receiver → {"t":"stats","decode_ms":..,"host_ms":..,"fps":..,"lost":..,"dropped":..,"shown_seq":N,"decoder":"..",
@@ -76,8 +139,17 @@ that much (`video_hold_ms` in stats), so both come out together, at the cost of 
 Android 7+ the receiver cuts the audio buffer to about 20 ms and `sync` is not worth it; on Android 5 and 6 it
 cannot (`limits` in the welcome, section 5), and the sender should let its user choose between the three.
 
-The sender sends from a socket bound to the LAN interface (section 2); the receiver takes the sender's address from
-the first packet. `codec` should be `bench.prefer` (section 5) when the sender can encode it.
+The sender sends from a socket bound to the LAN interface (section 2); the receiver takes media only from the
+address of the control connection (the same address family: IPv4 control, IPv4 media). `codec` should be
+`bench.prefer` (section 5) when the sender can encode it.
+
+**Sealed media (v1).** With a `key` in `ready`, every frame is sealed with AES-128-GCM as a whole before it is cut
+into shards: the shards carry ciphertext, the last one ends with the 16-byte tag, and `frame length` counts the tag.
+The nonce is `kind | 0 0 0 | frame sequence (u32) | 0 0 0 0`; the associated data is the 24-byte header with the
+shard index zeroed and the parity bit cleared (the same for every shard of a frame). Audio is sealed the same way,
+one packet a frame. The receiver opens a frame when its last shard is in, before anything in it counts: one that does
+not open is a lost frame (an IDR is asked for), so a forged packet costs a glitch at most. A new key every session;
+the sequence never repeats under one key.
 
 **Packet**: a 24-byte big-endian header, then a data shard of up to 1376 bytes.
 
@@ -298,6 +370,57 @@ to file it as an issue. Sending reports to a server must stay opt-in on the send
 
 ## 7. Later versions (reserved)
 
-Reed-Solomon FEC shards (the header already has room); pairing with a code shown on the TV; `media` (done, section
-4b); `{"t":"photo",...}` (done, section 4a: a sender-served link, no inline data);
-`{"t":"key","code":...}` from the TV remote back to the sender (next slide, pause).
+Reed-Solomon FEC shards (the header already has room; parity shards are made over the sealed frame); pairing with a
+code shown on the TV (done, section 3a); `media` (done, section 4b); `{"t":"photo",...}` (done, section 4a: a
+sender-served link, no inline data); `{"t":"key","code":...}` from the TV remote back to the sender (next slide,
+pause); sender-served links over HTTPS with the paired certificates.
+
+## 8. Design: who may use a receiver, and why so
+
+**Threats.** A LAN is not a trusted place: a café or hotel Wi-Fi, a flat with guests, a neighbour's laptop on a
+shared mesh. Before v1, anyone there could connect to a receiver and show anything, set the volume, open apps and
+put it to sleep; anyone who opened luchd's web receiver saw the laptop's screen after one press. Wanted: nothing
+reaches the screen without its person saying yes once; afterwards nothing to do; no prompt spam; no extra latency.
+
+**How others do it.**
+
+- *Moonlight / Sunshine (GameStream).* Moonlight shows a 4-digit PIN; the person types it into the host (Sunshine's
+  web page). The client sends a salt and its certificate; both derive an AES key from `SHA-256(salt | PIN)` and trade
+  encrypted challenges signed with their certificates; then each pins the other's certificate and later sessions
+  use HTTPS with client certificates and no PIN. The control stream (ENet) is AES-GCM with a per-session key given
+  over HTTPS at launch, audio AES-CBC; video encryption is optional (Sunshine: off on the LAN by default, on for
+  WAN), as encrypting it per packet costs weak clients. Weak point: someone in the middle who sees the exchange can
+  try all 10^4 PINs offline against it.
+- *Android TV Remote v2 (Polo).* TLS with a self-signed certificate on each side; the TV shows a 6-hex-digit code;
+  the client proves it by a hash over both certificates' keys and the code (the first byte doubles as a check). Both
+  then pin. The same offline weakness: one hash, 16 secret bits.
+- *AirPlay.* "Allow access: everyone / same network / home members / password", plus a 4-digit code on the screen
+  for a new device. Pairing is SRP-6a (a PAKE, as in HomeKit): a man in the middle gets one online guess, nothing to
+  try offline; then Ed25519 long-term keys, verified on every connection (pair-verify).
+- *Chromecast.* No pairing on a network: anyone on the LAN can cast; only the receiver is authenticated (a device
+  certificate from Google). Abuse is known (casting to TVs on campus and hotel networks); guest mode with a PIN was
+  removed. *Miracast.* Wi-Fi Direct with WPS push-button or PIN; TVs show "Allow / Deny / Always", keep allowed and
+  blocked lists, and some just accept anyone (the neighbour-casts-to-your-TV complaints).
+
+**What Luch takes.** TLS with self-signed certificates pinned on both sides (Moonlight, Polo, AirPlay's long-term
+keys); a code shown on the TV and typed on the sender (all of them); a prompt that does not interrupt what plays and
+a code only after Allow when something does (Miracast's question, without its full-screen dialog); refusal limits
+and a global pace of prompts (what Chromecast lacks). The code check avoids the offline weakness of Moonlight and
+Polo without a PAKE, which would need elliptic-curve arithmetic by hand in a receiver without libraries: the digits
+are committed to and opened one at a time, the sender first, as Bluetooth's passkey entry does with bits, so a man
+in the middle must guess digits online, once per code shown, under the refusal limits.
+
+**Media.** The UDP stream keeps its latency: no per-packet crypto and no jitter buffer added. A frame is sealed as a
+whole (one AES-GCM call over ~30 KB for 1080p, up to ~200 KB for an IDR) and opened when its last shard is in, which
+is when it would be decoded anyway. Measured on emulators of an ARM Mac: Android 14, 82 µs to open a 30 KB frame
+and 132 µs for 200 KB; Android 6.0, 12 µs and 65 µs; Android 5.0 (an older, slower Conscrypt), 0.46 ms and 3.0 ms. A frame is ~16 ms at 60 fps, and
+an IDR comes only at the start and after a loss; a real TV's numbers are the ones that count (the on-device test
+`openingAFrameIsCheap` logs them). ring on the sender seals faster still. Unlike Sunshine's default this also covers the LAN:
+here the LAN is the place the stream must be safe in, and per-frame sealing makes it cheap. Media is taken only
+from the control connection's address (a stranger's packets are dropped before any work), and a forged frame
+costs one lost frame at most.
+
+**What is not covered yet.** Files, covers and relayed media that a receiver fetches from a sender (sections 4a,
+4b, 4d, 4g) are plain HTTP on the LAN, protected by a random token in the path and by being served only to the
+receiver's address. The receiver's own announcement is not authenticated (mDNS), so a first pairing trusts the
+person to pair with the TV whose code they see.

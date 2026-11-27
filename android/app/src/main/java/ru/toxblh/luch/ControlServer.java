@@ -24,13 +24,21 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The control channel of PROTOCOL.md: TCP, one JSON object per line. v0 answers hello with welcome, keeps the
- * connection alive with ping/pong and says on screen who connected. A thread per connection: senders are a handful.
+ * The control channel of PROTOCOL.md: one JSON object per line, on two ports. The TLS port (v1) knows each sender by
+ * its certificate: a paired one gets the welcome at once, an unknown one is asked about on the TV and pairs with the
+ * code shown there (section 3a). The plain port (v0) keeps older senders working: each connection is asked about on
+ * the TV, and until the person allows it, only hello and pings are answered. A thread per connection: senders are a
+ * handful.
  */
 final class ControlServer {
     private static final int MAX_LINE = 64 * 1024;
     private static final int IDLE_MS = 30_000;
     private static final int PING_MS = 10_000;
+    static final int TLS_PORT = 47802;
+    /** How long the TV asks "allow?", and how long the person has to type the code on the sender. */
+    static final long ASK_MS = 60_000, CODE_MS = 120_000;
+    /** What anyone may send before being let in. */
+    private static final java.util.List<String> FREE = java.util.Arrays.asList("hello", "ping", "pong", "bye", "error");
 
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -40,8 +48,37 @@ final class ControlServer {
             java.util.Collections.newSetFromMap(new ConcurrentHashMap<>());
     private static final java.util.concurrent.ExecutorService WRITER =
             java.util.concurrent.Executors.newSingleThreadExecutor();
-    private ServerSocket socket;
+    private ServerSocket socket, tlsSocket;
     private volatile boolean running;
+    /** The TLS port, 0 while there is none (the keystore failed: then only the plain port works). */
+    static volatile int tlsPort;
+    private Identity identity;
+
+    /** Who is paired; tests put in one with a clock of their own. */
+    static volatile Gate gate;
+
+    static Gate gate(Context context) {
+        Gate g = gate;
+        if (g != null) return g;
+        synchronized (ControlServer.class) {
+            if (gate == null) {
+                android.content.SharedPreferences prefs =
+                        context.getSharedPreferences("luch_pairs", Context.MODE_PRIVATE);
+                gate = new Gate(System::currentTimeMillis, new Gate.Store() {
+                    @Override
+                    public String load() {
+                        return prefs.getString("gate", "");
+                    }
+
+                    @Override
+                    public void save(String json) {
+                        prefs.edit().putString("gate", json).apply();
+                    }
+                });
+            }
+            return gate;
+        }
+    }
 
     ControlServer(Context context) {
         this.context = context.getApplicationContext();
@@ -63,27 +100,55 @@ final class ControlServer {
         }
         running = true;
         watchVolume();
-        Thread accept = new Thread(this::acceptLoop, "luch-accept");
+        Thread accept = new Thread(() -> acceptLoop(socket, false), "luch-accept");
         accept.setDaemon(true);
         accept.start();
+        startTls();
         return socket.getLocalPort();
+    }
+
+    /** The TLS port, with this TV's own key from the keystore; asks every sender for its certificate. */
+    private void startTls() {
+        try {
+            identity = Identity.load(context, Identity.ALIAS);
+            javax.net.ssl.SSLServerSocket ss = (javax.net.ssl.SSLServerSocket)
+                    identity.tls().getServerSocketFactory().createServerSocket();
+            ss.setReuseAddress(true);
+            try {
+                ss.bind(new InetSocketAddress(TLS_PORT));
+            } catch (IOException taken) {
+                ss.bind(new InetSocketAddress(0));
+            }
+            ss.setNeedClientAuth(true);
+            tlsSocket = ss;
+            tlsPort = ss.getLocalPort();
+            Thread accept = new Thread(() -> acceptLoop(ss, true), "luch-accept-tls");
+            accept.setDaemon(true);
+            accept.start();
+        } catch (IOException | java.security.GeneralSecurityException | RuntimeException e) {
+            Log.w(LuchService.TAG, "no TLS port, older senders only", e);
+            tlsPort = 0;
+        }
     }
 
     void stop() {
         running = false;
-        try {
-            if (socket != null) socket.close();
-        } catch (IOException ignored) {
+        tlsPort = 0;
+        for (ServerSocket ss : new ServerSocket[]{socket, tlsSocket}) {
+            try {
+                if (ss != null) ss.close();
+            } catch (IOException ignored) {
+            }
         }
         for (Socket s : open) closeQuietly(s);
     }
 
-    private void acceptLoop() {
+    private void acceptLoop(ServerSocket server, boolean secure) {
         while (running) {
             try {
-                Socket s = socket.accept();
+                Socket s = server.accept();
                 open.add(s);
-                Thread t = new Thread(() -> serve(s), "luch-conn");
+                Thread t = new Thread(() -> serve(s, secure), "luch-conn");
                 t.setDaemon(true);
                 t.start();
             } catch (IOException e) {
@@ -99,14 +164,29 @@ final class ControlServer {
         return false;
     }
 
-    private void serve(Socket s) {
+    private void serve(Socket s, boolean secure) {
         String peerId = null;
         String peerName = null;
         String peerApp = "";
         String address = s.getInetAddress().getHostAddress();
         MirrorSession.Control control = null;
+        // Let in: paired (TLS), or allowed on the TV for this connection (plain). Set from the prompt's thread.
+        java.util.concurrent.atomic.AtomicBoolean allowed = new java.util.concurrent.atomic.AtomicBoolean();
+        // The TV's question about an older sender, while it is up; whoever takes it out ends it.
+        java.util.concurrent.atomic.AtomicReference<PairPrompt> asking = new java.util.concurrent.atomic.AtomicReference<>();
         try {
             s.setTcpNoDelay(true);
+            byte[] fp = null;
+            if (secure) {
+                s.setSoTimeout(5_000);   // a client that never finishes the handshake does not keep a thread
+                javax.net.ssl.SSLSocket tls = (javax.net.ssl.SSLSocket) s;
+                tls.startHandshake();
+                try {
+                    fp = Identity.fingerprint((java.security.cert.X509Certificate) tls.getSession().getPeerCertificates()[0]);
+                } catch (java.security.cert.CertificateEncodingException | ClassCastException e) {
+                    throw new IOException("unreadable certificate", e);
+                }
+            }
             s.setSoTimeout(PING_MS);
             BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
             OutputStream out = s.getOutputStream();
@@ -140,24 +220,45 @@ final class ControlServer {
                     continue;
                 }
                 String t = msg.optString("t");
+                if (!allowed.get() && !FREE.contains(t)) {
+                    send(out, new JSONObject().put("t", "error").put("code", "not_allowed").put("for", t)
+                            .put("detail", "allow it on the TV first"));
+                    continue;
+                }
                 switch (t) {
-                    case "hello":
+                    case "hello": {
+                        if (peerId != null) break;   // one hello per connection
                         peerId = msg.optString("id", address);
                         peerName = msg.optString("name", address);
                         peerApp = msg.optString("app");
-                        send(out, welcome());
-                        SENDERS.add(control);
-                        if (wants(msg, "reports")) {
-                            org.json.JSONArray reports = Reports.pending(context);
-                            if (reports.length() > 0) {
-                                send(out, new JSONObject().put("t", "reports").put("items", reports));
+                        if (secure && !admit(s, in, out, fp, peerId, peerName, address)) return;
+                        send(out, welcome(secure));
+                        MirrorSession.Control ctl = control;
+                        Luch.Peer peer = new Luch.Peer(peerId, peerName, address);
+                        Runnable letIn = () -> {
+                            allowed.set(true);
+                            SENDERS.add(ctl);
+                            Bench.autoRun(context, ControlServer::broadcastBench);
+                            Luch.connected(peer);
+                            say(context.getString(R.string.toast_connected, peer.name));
+                        };
+                        if (secure) {
+                            letIn.run();
+                            // Crash reports only to a paired sender: they say what this TV is and runs.
+                            if (wants(msg, "reports")) {
+                                org.json.JSONArray reports = Reports.pending(context);
+                                if (reports.length() > 0) {
+                                    send(out, new JSONObject().put("t", "reports").put("items", reports));
+                                }
                             }
+                        } else {
+                            // An older sender: the welcome as before, then the person decides on the TV.
+                            askOld(s, out, peerName, address, letIn, asking);
                         }
-                        Bench.autoRun(context, ControlServer::broadcastBench);
-                        Luch.connected(new Luch.Peer(peerId, peerName, address));
-                        say(context.getString(R.string.toast_connected, peerName));
-                        Log.i(LuchService.TAG, "hello from " + peerName + " " + address + " app=" + msg.optString("app"));
+                        Log.i(LuchService.TAG, "hello from " + peerName + " " + address + " app=" + msg.optString("app")
+                                + (secure ? " (TLS)" : " (plain)"));
                         break;
+                    }
                     case "ping":
                         send(out, new JSONObject().put("t", "pong").put("n", msg.optInt("n")));
                         break;
@@ -194,9 +295,16 @@ final class ControlServer {
                         }
                         try {
                             msg.put("_app", peerApp);
-                            int[] ports = MirrorSession.start(context, control, msg);
-                            send(out, new JSONObject().put("t", "ready")
-                                    .put("video_port", ports[0]).put("audio_port", ports[1]));
+                            // Over TLS the media is sealed with a key of this session, given only in the ready.
+                            byte[] key = secure ? MediaCrypt.newKey() : null;
+                            int[] ports = MirrorSession.start(context, control, msg, s.getInetAddress(), key);
+                            JSONObject ready = new JSONObject().put("t", "ready")
+                                    .put("video_port", ports[0]).put("audio_port", ports[1]);
+                            if (key != null) {
+                                ready.put("crypt", "aes-128-gcm")
+                                        .put("key", android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP));
+                            }
+                            send(out, ready);
                             Log.i(LuchService.TAG, "mirror from " + peerName + ": " + msg);
                         } catch (IOException | RuntimeException e) {
                             send(out, new JSONObject().put("t", "error").put("code", "start_failed")
@@ -330,6 +438,11 @@ final class ControlServer {
         } catch (IOException | JSONException e) {
             Log.i(LuchService.TAG, "connection " + address + " ended: " + e);
         } finally {
+            PairPrompt left = asking.getAndSet(null);
+            if (left != null) {
+                left.dismiss();   // the sender left while the TV was asking about it
+                gate(context).promptEnded();
+            }
             open.remove(s);
             closeQuietly(s);
             if (control != null) {
@@ -339,8 +452,246 @@ final class ControlServer {
                 MediaCast.closeFrom(control);
                 DocActivity.closeFrom(control);
             }
-            if (peerId != null) Luch.disconnected(peerId);
+            if (peerId != null && allowed.get()) Luch.disconnected(peerId);
         }
+    }
+
+    // ---- who may come in (PROTOCOL.md, section 3a) ----
+
+    /** Whether something is on the screen for a sender now: then an unknown one is asked about before any code. */
+    private static boolean playing() {
+        return MirrorSession.current != null || MediaCast.current != null || PhotoSession.current != null
+                || DocActivity.current != null;
+    }
+
+    /**
+     * A TLS sender's way in: paired, or asked about on the TV and paired with the code shown there. False: refused
+     * (and told why); the connection is then closed by the caller.
+     */
+    private boolean admit(Socket s, BufferedReader in, OutputStream out, byte[] fpBytes, String id, String name,
+            String address) throws IOException, JSONException {
+        Gate g = gate(context);
+        String fp = Pairing.hex(fpBytes);
+        Gate.Verdict v = g.check(fp, address);
+        if (v == Gate.Verdict.PAIRED) return true;
+        if (v != Gate.Verdict.PROMPT) {
+            Log.i(LuchService.TAG, "pairing from " + address + " not asked: " + v);
+            refuse(out, v == Gate.Verdict.BANNED ? "banned" : "busy", g.retryMs(fp, address));
+            return false;
+        }
+        java.util.concurrent.LinkedBlockingQueue<String> answers = new java.util.concurrent.LinkedBlockingQueue<>();
+        java.util.concurrent.atomic.AtomicBoolean codeShown = new java.util.concurrent.atomic.AtomicBoolean();
+        // The next sender may be asked about as soon as the person has answered, not once this thread notices.
+        java.util.concurrent.atomic.AtomicBoolean ended = new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable endPrompt = () -> {
+            if (ended.compareAndSet(false, true)) g.promptEnded();
+        };
+        PairPrompt prompt = null;
+        try {
+            String code = Pairing.newCode();
+            boolean askFirst = playing();
+            prompt = PairPrompt.show(context, name, false, askFirst ? null : code, new PairPrompt.Answer() {
+                @Override
+                public void allow() {
+                    answers.add("allow");
+                }
+
+                @Override
+                public void deny() {
+                    g.strike(fp, address);
+                    stopAsking("denied");
+                }
+
+                @Override
+                public void close() {
+                    stopAsking("dismissed");
+                }
+
+                /** While the code is up the connection's thread waits on the sender: end it from here. */
+                private void stopAsking(String reason) {
+                    endPrompt.run();
+                    answers.add(reason);
+                    if (codeShown.get()) {
+                        WRITER.execute(() -> {
+                            refuseQuietly(out, reason);
+                            closeQuietly(s);
+                        });
+                    }
+                }
+            });
+            if (askFirst) {
+                send(out, new JSONObject().put("t", "pair").put("step", "allow"));
+                String a = awaitAnswer(s, in, answers);
+                if (!"allow".equals(a)) {
+                    refuse(out, a == null ? "timeout" : a, 0);
+                    return false;
+                }
+                prompt.showCode(code);
+            }
+            // From here a "deny" on the TV closes the connection; one that came just before is seen here.
+            codeShown.set(true);
+            if (!answers.isEmpty()) {
+                refuse(out, answers.peek(), 0);
+                return false;
+            }
+            send(out, new JSONObject().put("t", "pair").put("step", "code").put("digits", Pairing.DIGITS));
+            boolean right;
+            try {
+                right = rounds(s, in, out, new Pairing(Pairing.RECEIVER, code, fpBytes, identity.fingerprint));
+            } catch (SocketTimeoutException slow) {
+                refuse(out, "timeout", 0);
+                return false;
+            }
+            if (!answers.isEmpty()) return false;   // denied on the TV meanwhile
+            if (!right) {
+                g.strike(fp, address);
+                refuse(out, "wrong_code", g.retryMs(fp, address));
+                return false;
+            }
+            g.pair(fp, id, name);
+            send(out, new JSONObject().put("t", "paired"));
+            say(context.getString(R.string.toast_paired, name));
+            Log.i(LuchService.TAG, "paired with " + name + " " + address);
+            return true;
+        } catch (IOException e) {
+            if (!answers.isEmpty()) return false;   // denied or closed on the TV: already told
+            throw e;
+        } finally {
+            if (prompt != null) prompt.dismiss();
+            endPrompt.run();
+            if (!s.isClosed()) s.setSoTimeout(PING_MS);
+        }
+    }
+
+    /** The first answer on the TV, or null after ASK_MS or when the sender goes away meanwhile. */
+    private static String awaitAnswer(Socket s, BufferedReader in, java.util.concurrent.BlockingQueue<String> answers)
+            throws IOException {
+        s.setSoTimeout(300);
+        long until = System.currentTimeMillis() + ASK_MS;
+        while (answers.isEmpty() && System.currentTimeMillis() < until) {
+            try {
+                String line = readLine(in);
+                if (line == null || line.contains("\"bye\"")) return null;   // the sender gave up
+            } catch (SocketTimeoutException quiet) {
+                // the person is still deciding
+            }
+        }
+        return answers.poll();
+    }
+
+    /** The code check, one round per digit, the sender opening first (Pairing). */
+    private static boolean rounds(Socket s, BufferedReader in, OutputStream out, Pairing p)
+            throws IOException, JSONException {
+        for (int r = 0; r < Pairing.DIGITS; r++) {
+            // The first commitment comes when the person has typed the code; the rest follow at once.
+            s.setSoTimeout(r == 0 ? (int) CODE_MS : 5_000);
+            JSONObject c = expect(in, out, "pair_commit", r);
+            send(out, new JSONObject().put("t", "pair_commit").put("round", r).put("c", p.commit(r)));
+            JSONObject o = expect(in, out, "pair_open", r);
+            if (!p.check(r, c.optString("c"), o.optString("n"))) return false;
+            send(out, new JSONObject().put("t", "pair_open").put("round", r).put("n", p.open(r)));
+        }
+        return true;
+    }
+
+    /** The next pairing message, which must be {@code type} for {@code round}; pings are answered on the way. */
+    private static JSONObject expect(BufferedReader in, OutputStream out, String type, int round)
+            throws IOException, JSONException {
+        while (true) {
+            String line = readLine(in);
+            if (line == null) throw new IOException("the sender left while pairing");
+            if (line.isEmpty()) continue;
+            JSONObject m = new JSONObject(line);
+            String t = m.optString("t");
+            if (t.equals("ping")) {
+                send(out, new JSONObject().put("t", "pong").put("n", m.optInt("n")));
+                continue;
+            }
+            if (t.equals(type) && m.optInt("round", -1) == round) return m;
+            throw new IOException("pairing: expected " + type + " " + round + ", got " + t);
+        }
+    }
+
+    /** {"t":"pair_refused"}: why the sender is not let in, and when it may ask again. */
+    private static void refuse(OutputStream out, String reason, long retryMs) throws IOException, JSONException {
+        JSONObject m = new JSONObject().put("t", "pair_refused").put("reason", reason);
+        if (retryMs > 0) m.put("retry_s", (retryMs + 999) / 1000);
+        send(out, m);
+    }
+
+    private static void refuseQuietly(OutputStream out, String reason) {
+        try {
+            refuse(out, reason, 0);
+        } catch (IOException | JSONException ignored) {
+            // gone already
+        }
+    }
+
+    /**
+     * An older sender on the plain port: it cannot pair, so the TV asks about every connection of it, and "allow"
+     * lets that connection in. Refusals count against its address; a refused connection is closed.
+     */
+    private void askOld(Socket s, OutputStream out, String name, String address, Runnable letIn,
+            java.util.concurrent.atomic.AtomicReference<PairPrompt> asking) {
+        Gate g = gate(context);
+        Gate.Verdict v = g.check(null, address);
+        if (v != Gate.Verdict.PROMPT) {
+            long wait = g.retryMs(null, address);
+            WRITER.execute(() -> {
+                try {
+                    send(out, new JSONObject().put("t", "error").put("code", "not_allowed")
+                            .put("detail", v == Gate.Verdict.BANNED
+                                    ? "refused on the TV; try again in " + (wait + 59_999) / 60_000 + " min"
+                                    : "the TV is asking about someone else; try again in " + (wait + 999) / 1000 + " s"));
+                } catch (IOException | JSONException ignored) {
+                }
+                closeQuietly(s);
+            });
+            return;
+        }
+        Runnable timeout = () -> {
+            PairPrompt p = asking.get();
+            if (p != null) p.pressBack();
+        };
+        asking.set(PairPrompt.show(context, name, true, null, new PairPrompt.Answer() {
+            @Override
+            public void allow() {
+                end();
+                letIn.run();
+            }
+
+            @Override
+            public void deny() {
+                g.strike(null, address);
+                end();
+                refuseOld("refused on the TV");
+            }
+
+            @Override
+            public void close() {
+                end();
+                refuseOld("not allowed on the TV");
+            }
+
+            private void end() {
+                main.removeCallbacks(timeout);
+                PairPrompt p = asking.getAndSet(null);
+                if (p == null) return;
+                p.dismiss();
+                g.promptEnded();
+            }
+
+            private void refuseOld(String why) {
+                WRITER.execute(() -> {
+                    try {
+                        send(out, new JSONObject().put("t", "error").put("code", "not_allowed").put("detail", why));
+                    } catch (IOException | JSONException ignored) {
+                    }
+                    closeQuietly(s);
+                });
+            }
+        }));
+        main.postDelayed(timeout, ASK_MS);
     }
 
     /** The volume, after a change from a sender or from the remote, to every connected sender. */
@@ -383,10 +734,12 @@ final class ControlServer {
         }
     }
 
-    private JSONObject welcome() throws JSONException {
+    private JSONObject welcome(boolean secure) throws JSONException {
         return new JSONObject()
                 .put("t", "welcome")
-                .put("v", Luch.VERSION)
+                // v1 over TLS; an older sender on the plain port hears v0 and where the TLS port is.
+                .put("v", secure ? Luch.VERSION_TLS : Luch.VERSION)
+                .put("tls_port", tlsPort)
                 .put("id", Luch.id(context))
                 .put("name", Luch.name(context))
                 .put("model", Luch.model())

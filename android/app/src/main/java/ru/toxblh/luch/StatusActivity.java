@@ -873,6 +873,23 @@ public class StatusActivity extends Activity {
             card.addView(switchRow(getString(R.string.setting_offer), Luch.offerNotification(this),
                     (b, on) -> Luch.setOfferNotification(this, on)));
         }
+        // Who may connect (PROTOCOL.md 3a): at home pairings stay; a guest's computer is forgotten at standby.
+        Gate gate = ControlServer.gate(this);
+        card.addView(divider());
+        card.addView(switchRow(getString(R.string.setting_guest), gate.guest(), (b, on) -> gate.setGuest(on)));
+        int paired = gate.paired().size();
+        if (paired > 0) {
+            card.addView(divider());
+            View forget = Ui.text(this, getString(R.string.setting_paired, paired), 17, Ui.TEXT, false);
+            forget.setPadding(dp(20), dp(14), dp(20), dp(14));
+            forget.setFocusable(true);
+            forget.setClickable(true);
+            forget.setOnClickListener(v -> {
+                gate.forgetAll();
+                render();
+            });
+            card.addView(forget);
+        }
         if (SleepService.supported()) {
             View line = new View(this);
             line.setBackgroundColor(Ui.DIVIDER);
@@ -882,6 +899,15 @@ public class StatusActivity extends Activity {
             card.addView(sleepRow());
         }
         content.addView(card, Ui.below(this, 20));
+    }
+
+    private View divider() {
+        View line = new View(this);
+        line.setBackgroundColor(Ui.DIVIDER);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        lp.setMargins(dp(20), 0, dp(20), 0);
+        line.setLayoutParams(lp);
+        return line;
     }
 
     /** Turning the TV off from a computer: on, or a way to the accessibility switch that turns it on. */

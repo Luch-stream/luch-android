@@ -27,6 +27,7 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
@@ -171,9 +172,20 @@ final class MirrorSession {
         Luch.notifyListeners();
     }
 
-    private MirrorSession(Context context, Control control, JSONObject start) {
+    /** Where the control connection comes from: media from anywhere else is not looked at. */
+    private final InetAddress from;
+    /** Opens each frame of a paired session (one per thread: a Cipher is not shared); null for an older sender. */
+    private final MediaCrypt videoCrypt, audioCrypt;
+    /** The authenticated header of the frame being assembled (MediaCrypt.aad). */
+    private byte[] curAad;
+
+    private MirrorSession(Context context, Control control, JSONObject start, InetAddress from, byte[] key)
+            throws java.security.GeneralSecurityException {
         this.context = context.getApplicationContext();
         this.control = control;
+        this.from = from;
+        this.videoCrypt = key == null ? null : new MediaCrypt(key);
+        this.audioCrypt = key == null ? null : new MediaCrypt(key);
         JSONObject v = start.optJSONObject("video");
         JSONObject a = start.optJSONObject("audio");
         videoMime = v == null ? "video/avc" : v.optString("codec", "video/avc");
@@ -192,14 +204,23 @@ final class MirrorSession {
     /** Sound only (PROTOCOL.md 4d): no picture, the "now playing" screen instead of the mirror's. */
     final boolean audioOnly;
 
-    /** Opens both sockets and the screen; returns {video port, audio port}. */
-    static synchronized int[] start(Context context, Control control, JSONObject msg) throws IOException {
+    /**
+     * Opens both sockets and the screen; returns {video port, audio port}. Media is taken only from {@code from}, and
+     * with a {@code key} only sealed with it (MediaCrypt).
+     */
+    static synchronized int[] start(Context context, Control control, JSONObject msg, InetAddress from, byte[] key)
+            throws IOException {
+        MirrorSession s;
+        try {
+            s = new MirrorSession(context, control, msg, from, key);
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IOException("no AES-GCM here", e);
+        }
         MirrorSession old = current;
         if (old != null) {
             old.replaced = true;   // the sender went on with another size: the screen stays up for the new session
             old.end(null);
         }
-        MirrorSession s = new MirrorSession(context, control, msg);
         s.videoSocket = openSocket();
         s.audioSocket = openSocket();
         current = s;
@@ -359,7 +380,7 @@ final class MirrorSession {
                     Log.i(LuchService.TAG, "video from " + p.getAddress().getHostAddress() + ":" + p.getPort());
                 }
                 int n = p.getLength();
-                if (n < HEADER || (buf[0] & 0xff) != KIND_VIDEO) continue;
+                if (n < HEADER || (buf[0] & 0xff) != KIND_VIDEO || !from.equals(p.getAddress())) continue;
                 int flags = buf[1] & 0xff;
                 int idx = h.getShort(2) & 0xffff;
                 int dataShards = h.getShort(4) & 0xffff;
@@ -398,6 +419,7 @@ final class MirrorSession {
             curGot = 0;
             curFlags = 0;
             curLen = frameLen;
+            if (videoCrypt != null) curAad = MediaCrypt.aad(buf, 0);
             java.util.Arrays.fill(curSeen, 0, shards, false);
             curActive = true;
         }
@@ -409,6 +431,15 @@ final class MirrorSession {
         if (curGot < curShards) return;
 
         curActive = false;
+        if (videoCrypt != null) {
+            // Opened before anything in it counts: a forged frame must not move the sequence on or pass for an IDR.
+            int plain = videoCrypt.open(KIND_VIDEO, seq, curAad, frameBuf, 0, curLen);
+            if (plain < 0) {
+                lost("frame " + seq + " does not authenticate");
+                return;
+            }
+            curLen = plain;
+        }
         if (lastDelivered >= 0 && seq != lastDelivered + 1) lost("gap before frame " + seq);
         lastDelivered = seq;
         framesIn++;
@@ -586,11 +617,15 @@ final class MirrorSession {
                     continue;
                 }
                 int n = p.getLength();
-                if (n < HEADER || (buf[0] & 0xff) != KIND_AUDIO) continue;
+                if (n < HEADER || (buf[0] & 0xff) != KIND_AUDIO || !from.equals(p.getAddress())) continue;
                 int flags = buf[1] & 0xff;
                 long seq = h.getInt(8) & 0xffffffffL;
                 int len = Math.min(h.getInt(16), n - HEADER);
                 if (len <= 0) continue;
+                if (audioCrypt != null) {
+                    len = audioCrypt.open(KIND_AUDIO, seq, MediaCrypt.aad(buf, 0), buf, HEADER, len);
+                    if (len <= 0) continue;   // forged or damaged: a moment of silence, nothing else
+                }
                 byte[] data = new byte[len];
                 System.arraycopy(buf, HEADER, data, 0, len);
                 if ((flags & FLAG_CONFIG) != 0) {
