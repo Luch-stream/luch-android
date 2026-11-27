@@ -64,6 +64,16 @@ final class Ui {
         return g;
     }
 
+    /** A button's background: {@code fill} and {@code stroke} as usual, a thick light ring while it has the focus. */
+    static android.graphics.drawable.StateListDrawable focusable(Context c, int fill, int stroke) {
+        GradientDrawable focused = round(c, fill == Color.TRANSPARENT ? 0x33FFFFFF : fill, 28, 0);
+        focused.setStroke(dp(c, 3), TEXT);
+        android.graphics.drawable.StateListDrawable bg = new android.graphics.drawable.StateListDrawable();
+        bg.addState(new int[]{android.R.attr.state_focused}, focused);
+        bg.addState(new int[]{}, round(c, fill, 28, stroke));
+        return bg;
+    }
+
     static TextView text(Context c, String s, int sp, int color, boolean bold) {
         TextView t = new TextView(c);
         t.setText(s);
@@ -105,7 +115,10 @@ final class Ui {
         int ink = primary ? ON_AMBER : TEXT;
         b.setTextColor(ink);
         b.setStateListAnimator(null);
-        b.setBackground(round(c, primary ? AMBER : Color.TRANSPARENT, 28, primary ? 0 : OUTLINE_BUTTON));
+        b.setBackground(focusable(c, primary ? AMBER : Color.TRANSPARENT, primary ? 0 : OUTLINE_BUTTON));
+        // On a TV the remote moves the focus: it must show which button OK presses, the filled one or not.
+        b.setOnFocusChangeListener((v, has) -> v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f)
+                .setDuration(120).start());
         if (icon != 0) {
             android.graphics.drawable.Drawable d = c.getResources().getDrawable(icon).mutate();
             d.setColorFilter(ink, android.graphics.PorterDuff.Mode.SRC_IN);
