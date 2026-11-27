@@ -72,10 +72,22 @@ final class Luch {
         SharedPreferences prefs = context.getSharedPreferences("luch", Context.MODE_PRIVATE);
         String id = prefs.getString("id", null);
         if (id == null) {
-            id = UUID.randomUUID().toString();
+            id = newId(android.provider.Settings.Secure.getString(context.getContentResolver(),
+                    android.provider.Settings.Secure.ANDROID_ID), context.getPackageName());
             prefs.edit().putString("id", id).apply();
         }
         return id;
+    }
+
+    /**
+     * The id of a new install. Made from ANDROID_ID, which outlives reinstalling (one per signing key since Android 8,
+     * one per device before, hence the package name in it): a reinstalled receiver is the same one to its senders,
+     * not another entry in their lists. Random when there is no ANDROID_ID.
+     */
+    static String newId(String androidId, String pkg) {
+        if (androidId == null || androidId.isEmpty()) return UUID.randomUUID().toString();
+        return UUID.nameUUIDFromBytes(("luch:" + pkg + ":" + androidId).getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toString();
     }
 
     /** Whether the receiver is switched on (the quick settings tile and the status screen turn it off and on). */
