@@ -228,6 +228,89 @@ PDF only: a sender turns other documents (text, office files, code) into PDF fir
 rules (section 4a). The receiver draws each page sharp at its own resolution. On the TV, left/right turn the page,
 OK switches between the whole page and the page's width (then up/down scroll), Back stops.
 
+## 4h. Input: the receiver drives the sender
+
+During a mirroring session the receiver's touch screen, stylus, keyboard, mouse and gamepads can control the
+sender: a tablet showing a laptop's desktop, a TV with a keyboard or a gamepad plugged in. The sender's person
+decides first.
+
+```
+receiver → welcome … "input":["touch","stylus","keyboard","mouse","gamepad"],"touch_points":10
+sender   → hello  … "want":[…,"input"]
+receiver → {"t":"input_request","devices":["touch"]}
+sender   → {"t":"input","grant":"once"|"always","token":"<16 hex digits>","accept":["touch","pointer","keyboard","gamepad","pen"],
+            "area":[2560,1440]}
+           or {"t":"input","grant":"no"}
+sender   → {"t":"input","grant":"off"}            control taken back during the session
+```
+
+- **Capabilities.** `input` in the welcome lists what the receiver can capture at all (`touch` for a touch screen,
+  `stylus` when a stylus has been seen or the screen takes one, `keyboard`, `mouse`, `gamepad` for what is plugged in
+  now or can be). A sender that can inject input says `"input"` in its hello's `want`; without it the receiver never
+  asks and keeps its touch screen for its own controls.
+- **Asking.** The receiver sends `input_request` the first time the person uses a device of a kind in a session
+  (the first touch on the picture, the first key of a keyboard), and again for a kind not asked for before. Input is
+  not sent before a grant; what is done meanwhile is dropped. The sender asks its person ("May Living room TV
+  control this computer?": allow once / always / no). `always` is remembered per receiver `id`: the next session's
+  grant comes right after `ready`, without a request. `no` holds for the session: the receiver asks no more.
+- **The grant.** `token` goes into every input datagram; `accept` is what the sender can inject now (a sender
+  that has no touch screen device turns touches into the pointer itself; `pen` with pressure needs uinput on Linux,
+  see luch-linux `docs/input.md`). `area` is the size of the shown area in the sender's logical pixels, for relative
+  motion. A grant ends with the session.
+- **The remote stays the receiver's.** Keys of the TV remote (D-pad, OK, Back, Home, media keys) keep their meaning
+  on the receiver; only full keyboards, mice, gamepads, the touch screen and the stylus go to the sender. Back from
+  the system (a phone's gesture or button) still ends the session.
+
+**Datagrams.** Input goes as UDP from the receiver's video socket to the address and port the video comes from: the
+sender's firewall lets it in as the answer of a flow it opened, no port is added to `ready`, and the VPN rules of
+section 2 hold by themselves. The receiver marks it DSCP EF (the Wi-Fi voice queue). The first byte is the kind,
+as in section 4, but the header is the input one:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | u8 | kind: 3 input |
+| 1 | u8 | version: 0 |
+| 2 | u16 | reserved, 0 |
+| 4 | u32 | packet sequence, +1 per packet; older or repeated ones are dropped (compared with wrap-around) |
+| 8 | u32 | time of the newest change in it, µs on the receiver's clock (low 32 bits) |
+| 12 | u64 | token from the grant (16 hex digits = 8 bytes, big-endian) |
+| 20 | … | records: u8 type, u8 length of what follows, then that many bytes; unknown types are skipped |
+
+All numbers are big-endian. Positions are normalized to the picture: `x`, `y` are 0…65535 from the left/top edge
+to the right/bottom edge of the video frame as sent (the receiver's own bars and crop are taken out). The records
+carry **state, not events**, so a lost datagram loses nothing but one in-between position:
+
+| Type | Record | Payload |
+|---|---|---|
+| 1 | touch | u8 n, then n × {u8 id, u8 tool, u16 x, u16 y, u16 pressure}: every contact that is down now. `id` stays the same while a contact is down (0…15). `tool`: 1 finger, 2 stylus, 3 eraser; +0x40 the stylus's button is held, +0x80 hovering (near the screen, not touching). `pressure` 0…65535, 0 when unknown. n = 0: everything is up. |
+| 2 | pointer | u8 buttons (bit 0 left, 1 right, 2 middle, 3 back, 4 forward), u8 flags (bit 0 `x`/`y` valid, bit 1 the wheel is smooth: a touchpad), u16 x, u16 y, i32 rel x, i32 rel y (running totals of relative motion since the session began, 1/16 of a logical pixel of `area`), i32 wheel y, i32 wheel x (running totals, 120 per wheel notch, positive = down / right) |
+| 3 | keys | u16 number of the first event, u8 n, n × {u16 code, u8 1 down / 0 up}, then u8 h, h × u16 code held now. Codes are Linux evdev `KEY_*`/`BTN_*` numbers. |
+| 4 | gamepad | u8 index (0…3), u8 flags (bit 0 connected; 0 = unplugged), u32 buttons, i16 left x, left y, right x, right y (−32768…32767, y positive down), u16 left trigger, right trigger (0…65535) |
+
+- **Running totals and event numbers** make loss harmless: the sender moves the pointer by the difference to the
+  last totals it saw, and applies key events whose number is newer than the last it applied (u16, wrap-around).
+  The receiver repeats each key event in every datagram for 300 ms (at most 32 events); `held` heals the rest: the
+  sender releases a key it holds that is not listed, but presses none from it. Key repeat is the sender's own.
+- **Gamepad buttons**: bit 0 A (south), 1 B (east), 2 X (west), 3 Y (north), 4 back/select, 5 guide, 6 start,
+  7 left stick, 8 right stick, 9 left shoulder, 10 right shoulder, 11 D-pad up, 12 down, 13 left, 14 right (the SDL
+  order).
+- **When.** A datagram goes out on every change, at once (the newest state replaces one not yet sent: no queue).
+  While anything is held or moving (a contact, a button, a key, a gamepad off centre) the state is sent again every
+  50 ms, and three more times after everything is let go. Each datagram carries every record of a device used in
+  the session (several gamepad records when several are plugged in).
+- **The sender's watchdog.** No datagram for 500 ms while something is held: everything is let go (the Wi-Fi went,
+  the receiver crashed). A datagram from another address or port, with a wrong token or before the grant, is dropped.
+- The token keeps out a blind injection on the LAN; it travels in the clear like the rest of the control channel.
+
+**On the receiver** (Android): *direct* mode puts a touch where it is seen (real multitouch, the stylus with its
+pressure); *touchpad* mode moves the pointer by finger motion (`rel`), a tap clicks, a two-finger tap right-clicks, two
+fingers scroll (`wheel`, smooth), a tap and then a drag holds the left button. A mouse is captured (Android 8+) and
+sends relative motion, so only the sender's cursor (in the picture) is seen; before Android 8 its position goes as
+`x`/`y`. A three-finger tap opens the receiver's own panel, where the mode is chosen.
+
+Not covered (yet): a phone as the controller of a TV session (the reverse direction), input from the web receiver,
+and an Android sender obeying input (it would need an accessibility service).
+
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 
 `welcome` also carries:
@@ -299,4 +382,5 @@ to file it as an issue. Sending reports to a server must stay opt-in on the send
 
 Reed-Solomon FEC shards (the header already has room); pairing with a code shown on the TV; `media` (done, section
 4b); `{"t":"photo",...}` (done, section 4a: a sender-served link, no inline data);
-`{"t":"key","code":...}` from the TV remote back to the sender (next slide, pause).
+`{"t":"key","code":...}` from the TV remote back to the sender (next slide, pause); input from the receiver's
+keyboards, mice, gamepads and touch screen is section 4h.
