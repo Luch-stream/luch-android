@@ -271,8 +271,8 @@ the sequence never repeats under one key.
 
 | Offset | Size | Field |
 |---|---|---|
-| 0 | u8 | kind: 1 video, 2 audio, 3 clock (section 4h) |
-| 1 | u8 | flags: bit0 IDR, bit1 codec config, bit2 parity shard, bit3 new timeline, bit4 clock reply (4h) |
+| 0 | u8 | kind: 1 video, 2 audio, 3 clock (section 4k) |
+| 1 | u8 | flags: bit0 IDR, bit1 codec config, bit2 parity shard, bit3 new timeline, bit4 clock reply (4k) |
 | 2 | u16 | shard index |
 | 4 | u16 | data shards in the frame |
 | 6 | u16 | parity shards (0 for now; Reed-Solomon FEC later) |
@@ -280,7 +280,7 @@ the sequence never repeats under one key.
 | 12 | u32 | pts in µs (capture time, low 32 bits; one clock for video and audio) |
 | 16 | u32 | frame length; the frame is the data shards joined and cut to this |
 | 20 | u16 | host latency, capture to send, in 0.1 ms |
-| 22 | u16 | playout delay D in 0.1 ms (section 4h); 0 = as soon as possible, what older senders send |
+| 22 | u16 | playout delay D in 0.1 ms (section 4k); 0 = as soon as possible, what older senders send |
 
 **Video**: one access unit per frame, Annex-B (H.264/HEVC), no B-frames, one reference frame, an IDR only when asked
 for, parameter sets inside every IDR access unit.
