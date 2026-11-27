@@ -437,6 +437,32 @@ final class ControlServer {
                                     .put("for", "sleep").put("sleep", SleepService.state(context)));
                         }
                         break;
+                    case BleWake.MODE: {
+                        // Another TV's remote, for a sender that cannot advertise itself (PROTOCOL.md 4l).
+                        String why = BleWake.code(Nearby.unavailable(context));
+                        if (why != null) {
+                            send(out, BleWake.error(why, BleWake.detail(why)));
+                            break;
+                        }
+                        BleWake w;
+                        try {
+                            w = BleWake.parse(msg);
+                        } catch (BleWake.Refused r) {
+                            send(out, r.answer());
+                            break;
+                        }
+                        if (!BleWake.take()) {
+                            send(out, BleWake.error("busy", "already sending one"));
+                            break;
+                        }
+                        Log.i(LuchService.TAG, "waking a TV by Bluetooth for " + peerName + ", " + w.ms + " ms");
+                        MirrorSession.Control reply = control;
+                        Nearby.wake(context, w.data, w.ms, (code, detail) -> {
+                            BleWake.release();
+                            reply.send(code == null ? BleWake.ok() : BleWake.error(code, detail));
+                        });
+                        break;
+                    }
                     case "bye":
                         return;
                     default:
@@ -755,7 +781,8 @@ final class ControlServer {
                 .put("model", Luch.model())
                 .put("decoders", new JSONArray(Luch.decoders()))
                 .put("max", Luch.maxSize())
-                .put("modes", new JSONArray().put("mirror").put("photo").put("media").put("audio").put("doc").put("ink").put("latency"))
+                .put("modes", BleWake.withMode(new JSONArray().put("mirror").put("photo").put("media").put("audio")
+                        .put("doc").put("ink").put("latency"), Nearby.unavailable(context)))
                 // The TV's own apps it can open with a link (PROTOCOL.md, section 4f).
                 .put("apps", Remote.apps(context))
                 // What "media" plays here (PROTOCOL.md, section 4b).

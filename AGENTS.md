@@ -18,6 +18,8 @@ sides together.
     its datagrams), `KeyMap` (Android key codes as evdev codes, gamepad bits), `Touchpad` (touchpad gestures); the
     last three are plain Java with JVM tests. `MirrorActivity` feeds them: a remote's keys stay on the receiver, only
     keyboards with letters, mice, devices with sticks and the touch screen go to the sender.
+  - `Nearby`: Bluetooth LE (the card, PROTOCOL.md 1c, and another TV's wake for a sender, 4l); `BleWake`: the
+    wake request's checks, plain Java with a JVM test.
   - `LowLatencyDecoder`: decoder setup; `Bench` and `Caps`: what the TV can do, sent in the welcome.
   - `LatencyOverlay`, `LatencyPattern`: the latency lab's pattern over the mirror screen (PROTOCOL.md, section 4j);
     the layout and the QR code must stay the same as luch-linux's `luch-latency/src/pattern.rs` (`LatencyPatternTest`).

@@ -22,13 +22,15 @@ import android.media.AudioTrack;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelUuid;
 import android.util.Log;
 
 import java.util.Collections;
 
 /**
  * Being found where mDNS does not get through (PROTOCOL.md 1c, 1d): this TV's card over Bluetooth LE, a sender
- * "looking for Luch" heard the same way, and the card said by sound when the person asks for it.
+ * "looking for Luch" heard the same way, the card said by sound when the person asks for it, and another TV's
+ * remote sent for a sender that cannot advertise (4l).
  *
  * Bluetooth is a bonus, never a condition: no adapter, Bluetooth off, no permission or no advertising support
  * (many TVs before Android 8) all leave {@link #state} saying so and everything else as it was.
@@ -60,6 +62,10 @@ final class Nearby {
     private static ScanCallback scanning;
     private static byte[] onAir;
     private static boolean eager;
+    /** Between start and stop; the card comes back after a wake only then. */
+    private static boolean started;
+    /** While another TV's wake is on the air, the card is not: many controllers keep one advertisement at a time. */
+    private static boolean quiet;
     private static final Runnable REFRESH = new Runnable() {
         @Override
         public void run() {
@@ -75,6 +81,7 @@ final class Nearby {
     static void start(Context context) {
         MAIN.post(() -> {
             app = context.getApplicationContext();
+            started = true;
             MAIN.removeCallbacks(REFRESH);
             REFRESH.run();
         });
@@ -82,6 +89,7 @@ final class Nearby {
 
     static void stop() {
         MAIN.post(() -> {
+            started = false;
             MAIN.removeCallbacks(REFRESH);
             stopAdvertising();
             stopListening();
@@ -122,7 +130,7 @@ final class Nearby {
 
     /** Puts the current card on the air again when the address changed, Bluetooth came on, or a sender looked. */
     private static void refresh() {
-        if (app == null) return;
+        if (app == null || quiet) return;
         boolean wantEager = System.currentTimeMillis() - lookingAt < EAGER_MS;
         String why = unavailable(app);
         byte[] c = why == null ? card(app) : null;
@@ -250,6 +258,121 @@ final class Nearby {
             Log.i(LuchService.TAG, "a sender nearby is looking: " + senderId);
             refresh();
             Luch.notifyListeners();
+        }
+    }
+
+    // ---------- waking another TV (PROTOCOL.md 4l) ----------
+
+    /** The answer to a wake: a null code once it was on the air for its time, else an error code and detail. */
+    interface WakeDone {
+        void done(String code, String detail);
+    }
+
+    /** The Human Interface Device service, as the remote's own advertisement lists it. */
+    private static final ParcelUuid HID = ParcelUuid.fromString("00001812-0000-1000-8000-00805f9b34fb");
+
+    /**
+     * Puts a TV remote's power-key advertisement on the air for {@code ms}, as luchd's wake.rs does: connectable,
+     * discoverable, the HID service and the MediaTek data, ten times a second and loud. A MoGo 4 in standby ignored
+     * that data alone, non-connectable. luchd also gives the keyboard appearance (0x03c1); Android has no public call
+     * for an advertisement's appearance, so it goes without.
+     */
+    @SuppressLint("MissingPermission") // unavailable() checked BLUETOOTH_ADVERTISE on Android 12+
+    static void wake(Context context, byte[] data, int ms, WakeDone done) {
+        MAIN.post(() -> {
+            String code = BleWake.code(unavailable(context));
+            BluetoothAdapter a = code == null ? adapter(context) : null;
+            BluetoothLeAdvertiser adv = a == null ? null : a.getBluetoothLeAdvertiser();
+            if (adv == null) {
+                if (code == null) code = "no_ble";
+                done.done(code, BleWake.detail(code));
+                return;
+            }
+            quiet = true;
+            stopAdvertising();
+            AdvertiseSettings settings = new AdvertiseSettings.Builder()
+                    .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                    .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+                    .setConnectable(true)
+                    .setTimeout(0)
+                    .build();
+            AdvertiseData ad = new AdvertiseData.Builder()
+                    .setIncludeDeviceName(false)
+                    .setIncludeTxPowerLevel(false)
+                    .addServiceUuid(HID)
+                    .addManufacturerData(BleWake.MEDIATEK, data)
+                    .build();
+            Wake w = new Wake(adv, ms, done);
+            MAIN.postDelayed(w, START_MS);
+            try {
+                adv.startAdvertising(settings, ad, w);
+            } catch (RuntimeException e) {
+                // SecurityException: the permission was taken back; IllegalStateException: Bluetooth went off
+                String c = e instanceof SecurityException ? "not_allowed" : "no_ble";
+                w.end(c, BleWake.detail(c));
+            }
+        });
+    }
+
+    /** How long Bluetooth has to say the advertisement started. */
+    private static final long START_MS = 3_000;
+
+    /** One wake on the air: its callbacks and its end, which answers exactly once (on the main thread). */
+    private static final class Wake extends AdvertiseCallback implements Runnable {
+        private final BluetoothLeAdvertiser adv;
+        private final int ms;
+        private final WakeDone done;
+        private boolean on, ended;
+
+        Wake(BluetoothLeAdvertiser adv, int ms, WakeDone done) {
+            this.adv = adv;
+            this.ms = ms;
+            this.done = done;
+        }
+
+        @Override
+        public void onStartSuccess(AdvertiseSettings s) {
+            if (ended) {
+                stop();   // too late: already answered, it must not stay on the air
+                return;
+            }
+            on = true;
+            MAIN.removeCallbacks(this);
+            MAIN.postDelayed(this, ms);
+        }
+
+        @Override
+        public void onStartFailure(int error) {
+            end("no_ble", "advertising failed: " + error);
+        }
+
+        /** The hold is over, or Bluetooth never said it started. */
+        @Override
+        public void run() {
+            if (on) {
+                end(null, null);
+            } else {
+                end("no_ble", "Bluetooth did not start advertising");
+            }
+        }
+
+        void end(String code, String detail) {
+            if (ended) return;
+            ended = true;
+            MAIN.removeCallbacks(this);
+            stop();
+            quiet = false;
+            if (started) refresh();
+            done.done(code, detail);
+        }
+
+        @SuppressLint("MissingPermission")
+        private void stop() {
+            try {
+                adv.stopAdvertising(this);
+            } catch (RuntimeException ignored) {
+                // Bluetooth already off
+            }
         }
     }
 

@@ -371,6 +371,7 @@ receiver → {"t":"sleeping"}               then the TV goes to standby, as with
 
 `welcome` carries `"sleep"`: `"on"` (works), `"off"` (the person has not turned it on: Android lets an app put the
 screen to sleep only through an accessibility service, which the receiver asks for once) or `"no"` (before Android 9).
+Waking a TV that is off, through a receiver that is on: section 4l.
 
 ## 4d. Sound only, now playing and media keys
 
@@ -653,6 +654,32 @@ sender   → {"t":"offset","ms":<signed>}       this receiver's own correction, 
 - **Receiver rules.** The sound plays at `pts + D + offset`: silence or a skip with 3 ms fades beyond 20 ms of error,
   below it single frames dropped or repeated at most 0.1 %; a chunk not there in time is silence of its length. A
   picture is released at `pts + D + offset − P/2` (P the display period), so the VSYNC at or after lands on it.
+
+## 4l. Waking another TV by Bluetooth
+
+A TV in standby may have no network (XGIMI projectors turn Wi-Fi off): only its remote's power-key advertisement
+wakes it, Bluetooth LE manufacturer data under MediaTek's company id `0x0046` (luch-linux `luchd/src/wake.rs`, learned
+from the remote). A sender that cannot put that on the air itself (macOS lets an app advertise only a name and service
+UUIDs) asks a receiver that is on and in Bluetooth range of the sleeping TV to send it:
+
+```
+sender   → {"t":"ble_wake","company":70,"data":"<hex>","ms":2000}
+receiver → {"t":"ble_wake","ok":true}     once it has been on the air for ms
+           or {"t":"error","code":"no_ble"|"not_allowed"|"busy"|"bad_request","for":"ble_wake","detail":"..."}
+```
+
+- The receiver lists `"ble_wake"` in `modes` only when it can send it: an LE advertiser, Bluetooth on and, on Android
+  12+, "Nearby devices" (`BLUETOOTH_ADVERTISE`) granted. Like everything after `hello`, it is obeyed only from a
+  sender let in (paired, or allowed on the TV).
+- `company` must be 70 (`0x0046`): nothing else is relayed. `data`: the bytes after the company id, 2 to 20 in hex
+  (with the flags and the service they must fit one legacy advertisement). `ms` is cut to 100–5000; left out, 2000
+  (about one press of the remote).
+- What goes on the air is luchd's advertisement: connectable, discoverable, service UUID `0x1812` (HID) and the
+  data, ten times a second at high power. luchd also sets the keyboard appearance `0x03c1`; Android has no public call
+  for an advertisement's appearance, so the receiver's goes without. Its own card (1c) is off the air meanwhile.
+- One at a time: another request while one is on the air is `busy`. `not_allowed`: the sender is not let in, or this
+  device lacks the Bluetooth permission (never asked for because of a network message: the status screen asks once).
+  `no_ble`: no adapter, Bluetooth off, or the advertising failed. An older receiver answers `unknown` (section 3).
 
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 

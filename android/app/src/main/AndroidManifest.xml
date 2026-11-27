@@ -18,7 +18,8 @@
          "adb shell appops set ru.toxblh.luch SYSTEM_ALERT_WINDOW allow" (Android TV has no settings page for it). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Being found over Bluetooth LE where mDNS does not get through (PROTOCOL.md 1c): this TV's card on the air,
-         and on Android 12+ senders looking for one. Never used to locate anyone. -->
+         and on Android 12+ senders looking for one; and another TV's remote sent for a sender (4l). Never used to
+         locate anyone. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
