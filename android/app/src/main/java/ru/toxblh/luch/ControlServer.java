@@ -296,6 +296,15 @@ final class ControlServer {
                         if (m != null && m.control == control) m.input.onGrant(msg);
                         break;
                     }
+                    case "probe":
+                        // The acoustic calibration (PROTOCOL.md 4k): only as a dry run, and only when turned on.
+                        send(out, Calibration.answer(context, msg));
+                        break;
+                    case "offset": {
+                        MirrorSession m = MirrorSession.current;
+                        if (m != null && m.control == control) m.onOffset(msg);
+                        break;
+                    }
                     case "sender_stats": {
                         MirrorSession m = MirrorSession.current;
                         if (m != null && m.control == control) m.onSenderStats(msg);
@@ -792,6 +801,8 @@ final class ControlServer {
                 // Android version, and what works worse on it than on 8.0+ (PROTOCOL.md, section 5).
                 .put("sdk", android.os.Build.VERSION.SDK_INT)
                 .put("limits", Caps.limits())
+                // Playing in step with other devices (PROTOCOL.md, section 4k).
+                .put("sync", SyncSession.capabilities(Calibration.enabled(context)))
                 // What the hardware says it can do, and what it measured (null until the bench has run).
                 .put("hw", Caps.collect(context))
                 // What could control the sender from here (4i).

@@ -271,8 +271,8 @@ the sequence never repeats under one key.
 
 | Offset | Size | Field |
 |---|---|---|
-| 0 | u8 | kind: 1 video, 2 audio |
-| 1 | u8 | flags: bit0 IDR, bit1 codec config, bit2 parity shard |
+| 0 | u8 | kind: 1 video, 2 audio, 3 clock (section 4h) |
+| 1 | u8 | flags: bit0 IDR, bit1 codec config, bit2 parity shard, bit3 new timeline, bit4 clock reply (4h) |
 | 2 | u16 | shard index |
 | 4 | u16 | data shards in the frame |
 | 6 | u16 | parity shards (0 for now; Reed-Solomon FEC later) |
@@ -280,7 +280,7 @@ the sequence never repeats under one key.
 | 12 | u32 | pts in µs (capture time, low 32 bits; one clock for video and audio) |
 | 16 | u32 | frame length; the frame is the data shards joined and cut to this |
 | 20 | u16 | host latency, capture to send, in 0.1 ms |
-| 22 | u16 | reserved, 0 |
+| 22 | u16 | playout delay D in 0.1 ms (section 4h); 0 = as soon as possible, what older senders send |
 
 **Video**: one access unit per frame, Annex-B (H.264/HEVC), no B-frames, one reference frame, an IDR only when asked
 for, parameter sets inside every IDR access unit.
@@ -585,6 +585,64 @@ The QR code is byte mode, error correction L, the smallest version that holds th
 The receiver draws its pattern with `S` = 0.3 of the screen height, the box 0.03 of the height from the right and
 bottom edges. The sender's page (`LUCH1;S;...`) puts its own at the left with `S` = 0.38, so on a 16:9 TV the two
 never overlap, whatever the computer's screen shape.
+
+## 4k. Sync: several devices, one time
+
+A sender can play to a group: a TV for the picture and another receiver as its speaker, or several TVs and speakers
+at once. Every device presents each frame at `pts + D` on the sender's clock; D is the same for all and comes in every
+packet, so a change of D hits the same frame everywhere. The design and its numbers: luch-linux
+`docs/research/sync-multiroom.md`.
+
+```
+receiver → welcome adds "sync":{"v":1,"clock":true,"probe":false,"mic":false}
+sender   → start adds  "group":{"id":"<uuid>","timeline":<u32>,"role":"video"|"audio"|"both",
+                                "mode":"interactive"|"watch","tolerance_ms":20,"offset_ms":<signed>}
+receiver → stats adds  "clock":{"err_us":N,"skew_ppm":F,"rtt_us":N},"need_ms":F,"sync_err_ms":F,
+                       "out":{"audio_ms":F,"audio_src":"timestamp"|"head","video_ms":F,"route":"builtin"|"hdmi"|
+                              "hdmi_arc"|"bluetooth"|"usb"|"line"|"other"|"unknown","video_pts_ms":F,
+                              "video_err_ms":F,"audio_resyncs":N,"audio_concealed":N}
+sender   → {"t":"offset","ms":<signed>}       this receiver's own correction, at once (a slider, a calibration)
+```
+
+- **Only with a group.** A receiver asks for the clock only when `start` has a `group`; a sender without one never
+  sees a kind 3 packet. A sender writes D > 0 only to receivers whose welcome has `sync`; older receivers read the
+  header as before and play at once. Packets with D = 0 are presented as soon as possible, as before, also in a group.
+- `role`: what this receiver presents; the sender sends only those streams. `offset_ms` (positive = later) is this
+  receiver's own correction, kept by the sender per receiver and output route. `timeline` is a random number per sender
+  pipeline; flags bit3 marks the first packets after its pts base restarted.
+- **Clock (kind 3).** The receiver sends requests to the address and port the media comes from, on the audio socket
+  when it has one, else on the video one: 16 requests 30 ms apart at the start, then 4 a second, a burst again after
+  3 s without a reply. The 24-byte header has kind 3, `seq` = the request's number, `pts` = the low 32 bits of t1,
+  `length` = the payload's bytes; the payload is big-endian:
+
+  ```
+  request (receiver → sender)          u64 t1                 receiver µs, its monotonic clock
+  reply   (sender → receiver, bit4)    u64 t1, u64 t2, u64 t3  t2 received, t3 sent: the pts clock, µs, 64-bit
+  ```
+
+  The sender answers every request it can parse at once, on the same socket, and keeps no state. Its pts clock is the
+  one the media's pts are on (pipeline running time), in full 64 bits; a receiver unwraps the header's 32-bit pts to
+  the value nearest its estimate of the sender's clock now.
+- **Stats.** `clock.err_us`: half the best round trip plus the fit's residual. `need_ms`: what D must at least be for
+  this receiver: p99 of its packets' lag behind their pts over the last seconds, plus its own output path, plus 3 ms.
+  `sync_err_ms`: the median of presented − due over the last second (the sound's when it plays sound, else the
+  picture's; `out.video_err_ms` is the picture's). `out.audio_ms`: arrival (scheduled: decode plus the track) to the
+  ear, from `AudioTrack.getTimestamp` (`audio_src` `timestamp`) or the playback head and a 20 ms guess (`head`);
+  `out.video_ms`: decoder input to the display, from the render callbacks; `out.video_pts_ms`: pts to the display,
+  what an interactive sender waits the sound for.
+- **D.** Watching: one D for all, the largest `need_ms` plus 2 ms, at least 150 ms; it rises at once and falls by 1 ms
+  a second after 30 s well below. Interactive: the picture at once (D = 0 on video packets) and the sound at the later
+  of its own need and the TVs' `video_pts_ms`; only a speaker slower than the picture plus `tolerance_ms` holds the
+  picture, by the excess.
+- **Calibration.** What the platform cannot see (an ARC soundbar's DSP, a projector's processing) is measured by
+  sound: each receiver plays 2–6 kHz log sweeps at times on the sender's clock, one microphone records, and the
+  sender sets `offset` so that all arrive together. `{"t":"probe","id":"..","at":<sender µs>,"signal":"sweep",
+  "f0":2000,"f1":6000,"ms":200,"n":4,"gap_ms":500,"gain":0.3}` is answered with `{"t":"probe_done","id":"..",
+  "played":[<sender µs>..]}`. This version answers only as a dry run (`"dry_run":true`, nothing played) and only when
+  the receiver's setting for it is on (welcome `sync.probe`); otherwise `{"t":"error","code":"probe_off"}`.
+- **Receiver rules.** The sound plays at `pts + D + offset`: silence or a skip with 3 ms fades beyond 20 ms of error,
+  below it single frames dropped or repeated at most 0.1 %; a chunk not there in time is silence of its length. A
+  picture is released at `pts + D + offset − P/2` (P the display period), so the VSYNC at or after lands on it.
 
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 

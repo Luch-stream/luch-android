@@ -65,18 +65,31 @@ public class AudioModesTest {
         }
     }
 
+    /**
+     * Phase 0 of docs: sync: the hold is what the sound takes beyond the picture, both measured (the track's
+     * timestamps, the render callbacks), not the audio buffer's size.
+     */
     @Test
-    public void syncHoldsThePictureBackByTheAudioDelay() throws Exception {
+    public void syncHoldsThePictureBackByWhatTheSoundTakesMore() throws Exception {
         JSONObject stats = session(true);
-        int audio = stats.getInt("audio_latency_ms");
+        JSONObject out = stats.getJSONObject("out");
+        double audio = out.getDouble("audio_ms"), video = out.getDouble("video_ms");
         assertTrue(stats.toString(), audio > 0);
-        assertEquals(stats.toString(), audio, stats.getInt("video_hold_ms"));
+        // The emulator reports a render a few ms before the time asked for, so a held picture can read slightly
+        // negative there; a TV reports when it really showed it.
+        assertTrue(stats.toString(), video > -10);
+        String src = out.getString("audio_src");
+        assertTrue(stats.toString(), src.equals("timestamp") || src.equals("head"));
+        assertTrue(stats.toString(), out.has("route"));
+        // video_hold_ms is set from the same medians a moment before they are rounded into the stats.
+        assertEquals(stats.toString(), Math.max(0, audio - video), stats.getInt("video_hold_ms"), 3);
+        assertEquals(stats.toString(), stats.getInt("video_hold_ms"), stats.getInt("audio_latency_ms"), 1);
     }
 
     @Test
     public void withoutSyncThePictureIsNotHeld() throws Exception {
         JSONObject stats = session(false);
-        assertTrue(stats.toString(), stats.getInt("audio_latency_ms") > 0);
+        assertTrue(stats.toString(), stats.getJSONObject("out").getDouble("audio_ms") > 0);
         assertEquals(stats.toString(), 0, stats.getInt("video_hold_ms"));
     }
 
@@ -85,12 +98,16 @@ public class AudioModesTest {
         JSONObject ready = sender.start(new JSONObject().put("codec", "audio/opus").put("rate", 48000)
                 .put("channels", 2).put("frame_ms", 5).put("sync", sync));
         sender.sendOpusHead(ready.getInt("audio_port"));
-        sender.stream(ready.getInt("video_port"), 3_000);
+        Thread audio = sender.streamSilence(ready.getInt("audio_port"), 4_000);
+        sender.stream(ready.getInt("video_port"), 4_000);
+        audio.join();
         JSONObject last = null;
         for (JSONObject m : sender.drain()) {
-            if ("stats".equals(m.optString("t")) && m.optInt("audio_latency_ms") > 0) last = m;
+            if ("stats".equals(m.optString("t")) && m.optJSONObject("out") != null
+                    && m.getJSONObject("out").has("audio_ms") && m.getJSONObject("out").has("video_ms")) last = m;
         }
         assertNotNull("no stats with the audio track up", last);
+        android.util.Log.i("LuchTest", "sync=" + sync + " stats " + last);
         return last;
     }
 }

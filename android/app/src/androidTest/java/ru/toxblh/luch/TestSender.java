@@ -45,6 +45,58 @@ final class TestSender {
     private MediaCrypt crypt;
     String id = "test", name = "Test sender";
 
+    /**
+     * The sender's pts clock (µs): this device's monotonic clock 7 s ahead, so that a receiver which did not map it
+     * through its clock estimate would be 7 s off.
+     */
+    static long senderUs() {
+        return System.nanoTime() / 1000 + 7_000_000;
+    }
+
+    /** The playout delay D written into every packet (0.1 ms; 0 = as soon as possible, what an older sender sends). */
+    volatile int delayUnits;
+    /** Clock requests seen and answered (kind 3), over both media sockets. */
+    final java.util.concurrent.atomic.AtomicInteger clockRequests = new java.util.concurrent.atomic.AtomicInteger();
+    /** Whether kind 3 requests are answered: an older sender does not. */
+    volatile boolean answerClock = true;
+    private DatagramSocket videoUdp, audioUdp;
+
+    /** The media sockets: one per kind, kept for the session so that the receiver's clock requests come back to them. */
+    private synchronized DatagramSocket udp(boolean audio) throws IOException {
+        DatagramSocket s = audio ? audioUdp : videoUdp;
+        if (s != null) return s;
+        DatagramSocket made = new DatagramSocket();
+        if (audio) audioUdp = made;
+        else videoUdp = made;
+        Thread t = new Thread(() -> answer(made), "test-sender-clock");
+        t.setDaemon(true);
+        t.start();
+        return made;
+    }
+
+    /** Answers kind 3 requests on {@code s} as PROTOCOL.md 4k says: t1 back, with t2 and t3 on the pts clock. */
+    private void answer(DatagramSocket s) {
+        byte[] b = new byte[64];
+        DatagramPacket p = new DatagramPacket(b, b.length);
+        try {
+            while (!s.isClosed()) {
+                s.receive(p);
+                long t2 = senderUs();
+                if (p.getLength() < 32 || b[0] != 3 || (b[1] & 16) != 0) continue;
+                clockRequests.incrementAndGet();
+                if (!answerClock) continue;
+                ByteBuffer r = ByteBuffer.allocate(48);
+                r.put(b, 0, 24).putLong(ByteBuffer.wrap(b, 24, 8).getLong());
+                r.put(1, (byte) 16).putInt(16, 24);
+                r.position(32);
+                r.putLong(t2).putLong(senderUs());
+                s.send(new DatagramPacket(r.array(), 48, p.getAddress(), p.getPort()));
+            }
+        } catch (IOException ignored) {
+            // closed
+        }
+    }
+
     private TestSender(Socket socket) throws IOException {
         this.socket = socket;
         this.out = socket.getOutputStream();
@@ -212,12 +264,16 @@ final class TestSender {
         return startCodec(codec, audio);
     }
 
+    /** A start's "group" (PROTOCOL.md 4k), null for none: what an older sender sends. */
+    JSONObject group;
+
     JSONObject startCodec(String mime, JSONObject audio) throws Exception {
         codec = mime;
         JSONObject start = new JSONObject().put("t", "start").put("mode", "mirror")
                 .put("video", new JSONObject().put("codec", codec).put("width", 1920).put("height", 1080)
                         .put("fps", 30));
         if (audio != null) start.put("audio", audio);
+        if (group != null) start.put("group", group);
         send(start);
         JSONObject ready = next(5_000);
         assertEquals("ready: " + ready, "ready", ready.getString("t"));
@@ -235,18 +291,58 @@ final class TestSender {
         int len = crypt == null ? h.length : h.length + MediaCrypt.TAG_BYTES;
         ByteBuffer b = ByteBuffer.allocate(MirrorSession.HEADER + len);
         b.put((byte) 2).put((byte) 2).putShort((short) 0).putShort((short) 1).putShort((short) 0)
-                .putInt(0).putInt(0).putInt(len).putShort((short) 0).putShort((short) 0);
+                .putInt(0).putInt((int) senderUs()).putInt(len).putShort((short) 0).putShort((short) delayUnits);
         b.put(seal(2, 0, b.array(), h));
-        try (DatagramSocket udp = new DatagramSocket()) {
-            udp.send(new DatagramPacket(b.array(), b.position(), InetAddress.getByName("127.0.0.1"), port));
-        }
+        udp(true).send(new DatagramPacket(b.array(), b.position(), InetAddress.getByName("127.0.0.1"), port));
+    }
+
+    /**
+     * Digital silence as the sender's Opus encoder makes it (libopus, CELT 5 ms, 128 kbit/s CBR, stereo): what a
+     * receiver decodes and plays, without a sound. Tests never send anything louder.
+     */
+    static byte[] silentOpus() {
+        byte[] p = new byte[80];
+        p[0] = (byte) 0xec;   // TOC: CELT full band, 5 ms, stereo, one frame
+        p[1] = (byte) 0xff;
+        p[2] = (byte) 0xfe;
+        return p;
+    }
+
+    /** Silent Opus frames every 5 ms to {@code port} for {@code ms}, on a thread of their own; pts on the video's clock. */
+    Thread streamSilence(int port, long ms) {
+        Thread t = new Thread(() -> {
+            byte[] f = silentOpus();
+            try {
+                DatagramSocket udp = udp(true);
+                InetAddress to = InetAddress.getByName("127.0.0.1");
+                long start = SystemClock.uptimeMillis();
+                long pts0 = senderUs();
+                for (int s = 0; SystemClock.uptimeMillis() - start < ms; s++) {
+                    // The pts of a 5 ms chunk, as an encoder stamps it: its first sample's capture time.
+                    long pts = pts0 + s * 5000L;
+                    int wireLen = crypt == null ? f.length : f.length + MediaCrypt.TAG_BYTES;
+                    byte[] head = ByteBuffer.allocate(MirrorSession.HEADER).put((byte) 2).put((byte) 0)
+                            .putShort((short) 0).putShort((short) 1).putShort((short) 0).putInt(s).putInt((int) pts)
+                            .putInt(wireLen).putShort((short) 0).putShort((short) delayUnits).array();
+                    byte[] w = seal(2, s, head, f);
+                    ByteBuffer b = ByteBuffer.allocate(MirrorSession.HEADER + w.length).put(head).put(w);
+                    udp.send(new DatagramPacket(b.array(), b.position(), to, port));
+                    long next = start + (s + 1) * 5L;
+                    long wait = next - SystemClock.uptimeMillis();
+                    if (wait > 0) SystemClock.sleep(wait);
+                }
+            } catch (IOException ignored) {
+                // the session ended
+            }
+        }, "test-sender-audio");
+        t.setDaemon(true);
+        t.start();
+        return t;
     }
 
     /** The bench clip of {@link #codec} (one access unit per AUD), looped at 30 fps for {@code ms}. */
     void stream(int port, long ms) throws Exception {
-        try (DatagramSocket udp = new DatagramSocket()) {
-            stream(udp, port, ms);
-        }
+        stream(udp(false), port, ms); // the socket that answers the receiver's clock requests
     }
 
     /** As {@link #stream(int, long)}, from {@code udp}: the socket the receiver's input comes back to (PROTOCOL.md 4i). */
@@ -282,19 +378,19 @@ final class TestSender {
 
     private void sendFrame(DatagramSocket udp, InetAddress to, int port, byte[] plain, int flags) throws IOException {
         int s = seq++;
-        int pts = (int) (SystemClock.uptimeMillis() * 1000);
+        int pts = (int) senderUs();
         int wireLen = crypt == null || forge ? plain.length : plain.length + MediaCrypt.TAG_BYTES;
         int shards = (wireLen + MirrorSession.SHARD - 1) / MirrorSession.SHARD;
         byte[] head = ByteBuffer.allocate(MirrorSession.HEADER).put((byte) 1).put((byte) flags).putShort((short) 0)
                 .putShort((short) shards).putShort((short) 0).putInt(s).putInt(pts).putInt(wireLen).putShort((short) 0)
-                .putShort((short) 0).array();
+                .putShort((short) delayUnits).array();
         byte[] f = forge ? plain : seal(1, s, head, plain);
         for (int i = 0; i < shards; i++) {
             int off = i * MirrorSession.SHARD, len = Math.min(MirrorSession.SHARD, f.length - off);
             ByteBuffer b = ByteBuffer.allocate(MirrorSession.HEADER + len);
             b.put((byte) 1).put((byte) flags).putShort((short) i).putShort((short) shards).putShort((short) 0)
                     .putInt(s).putInt(pts).putInt(f.length)
-                    .putShort((short) 0).putShort((short) 0).put(f, off, len);
+                    .putShort((short) 0).putShort((short) delayUnits).put(f, off, len);
             udp.send(new DatagramPacket(b.array(), b.position(), to, port));
         }
     }
@@ -339,6 +435,10 @@ final class TestSender {
     }
 
     void close() {
+        synchronized (this) {
+            if (videoUdp != null) videoUdp.close();
+            if (audioUdp != null) audioUdp.close();
+        }
         try {
             send(new JSONObject().put("t", "stop"));
             send(new JSONObject().put("t", "bye"));
