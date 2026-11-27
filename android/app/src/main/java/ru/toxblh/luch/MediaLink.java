@@ -7,7 +7,10 @@ import org.json.JSONObject;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -103,8 +106,16 @@ final class MediaLink {
      * as fitting. Null when none fits.
      */
     static JSONObject pick(JSONArray src, Collection<String> decoders, int maxW, int maxH) {
-        JSONObject best = null;
-        long bestArea = -1;
+        List<JSONObject> all = choices(src, decoders, maxW, maxH);
+        return all.isEmpty() ? null : all.get(0);
+    }
+
+    /**
+     * Every source {@link #pick} could take, biggest first and one per height (the first of a size is kept): what the
+     * quality menu offers. The first is the pick.
+     */
+    static List<JSONObject> choices(JSONArray src, Collection<String> decoders, int maxW, int maxH) {
+        List<JSONObject> out = new ArrayList<>();
         for (int i = 0; src != null && i < src.length(); i++) {
             JSONObject s = src.optJSONObject(i);
             if (s == null || s.optString("url").isEmpty()) continue;
@@ -118,13 +129,32 @@ final class MediaLink {
                     && (Math.max(w, h) > Math.max(maxW, maxH) || Math.min(w, h) > Math.min(maxW, maxH))) {
                 continue;
             }
-            long area = (long) w * h;
-            if (best == null || area > bestArea) {
-                best = s;
-                bestArea = area;
-            }
+            out.add(s);
         }
-        return best;
+        // Stable: of the same size the first listed stays first.
+        Collections.sort(out, (x, y) -> Long.compare(area(y), area(x)));
+        java.util.Set<Integer> sizes = new java.util.HashSet<>();
+        List<JSONObject> one = new ArrayList<>();
+        for (JSONObject s : out) {
+            int h = Math.min(s.optInt("w"), s.optInt("h"));
+            if (h > 0 && !sizes.add(h)) continue;
+            one.add(s);
+        }
+        return one;
+    }
+
+    private static long area(JSONObject s) {
+        return (long) s.optInt("w") * s.optInt("h");
+    }
+
+    /** What the quality menu calls a source: the page's own label, else its short side ("720p"), else its type. */
+    static String qualityLabel(JSONObject s) {
+        String label = s.optString("label");
+        if (!label.isEmpty()) return label;
+        int h = Math.min(s.optInt("w"), s.optInt("h"));
+        if (h > 0) return h + "p";
+        String mime = s.optString("mime");
+        return mime.contains("mpegurl") ? "Auto" : "—";
     }
 
     private static final Map<String, String> CODECS = new HashMap<>();

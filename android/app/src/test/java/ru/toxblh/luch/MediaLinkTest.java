@@ -121,6 +121,29 @@ public class MediaLinkTest {
     }
 
     @Test
+    public void qualitiesAreTheFittingOnesBiggestFirstOnePerSize() throws Exception {
+        JSONArray s = new JSONArray()
+                .put(src("360", "video/mp4", 640, 360, "avc"))
+                .put(src("4k", "video/mp4", 3840, 2160, "hevc"))
+                .put(src("1080", "video/mp4", 1920, 1080, "avc"))
+                .put(src("1080b", "video/mp4", 1920, 1080, "avc"))
+                .put(src("av1", "video/mp4", 1280, 720, "av01.0.08M.08"));
+        List<JSONObject> q = MediaLink.choices(s, AVC_HEVC, 1920, 1080);
+        assertEquals(2, q.size());
+        assertEquals("1080", q.get(0).optString("url"));
+        assertEquals("360", q.get(1).optString("url"));
+        assertEquals("the pick is the first", "1080", MediaLink.pick(s, AVC_HEVC, 1920, 1080).optString("url"));
+    }
+
+    @Test
+    public void qualityLabels() throws Exception {
+        assertEquals("720p", MediaLink.qualityLabel(src("x", "video/mp4", 1280, 720, null)));
+        assertEquals("1080p", MediaLink.qualityLabel(src("x", "video/mp4", 1080, 1920, null)));
+        assertEquals("HD", MediaLink.qualityLabel(src("x", "video/mp4", 1280, 720, null).put("label", "HD")));
+        assertEquals("Auto", MediaLink.qualityLabel(src("x", "application/vnd.apple.mpegurl", 0, 0, null)));
+    }
+
+    @Test
     public void onlyAllowedHeadersGoAlong() throws Exception {
         Map<String, String> h = MediaLink.headers(new JSONObject()
                 .put("referer", "https://site.example/")

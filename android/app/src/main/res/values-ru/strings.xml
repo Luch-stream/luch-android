@@ -106,7 +106,6 @@
     <string name="media_loading">Загрузка…</string>
     <string name="media_failed">Не удалось воспроизвести видео</string>
     <string name="media_paused">Пауза</string>
-    <string name="media_speed">Скорость: %s</string>
     <string name="media_speed_title">Скорость</string>
     <string name="media_audio">Звуковая дорожка</string>
     <string name="media_subs">Субтитры</string>
@@ -125,4 +124,7 @@
     <string name="sound_android10">Нужен Android 10+</string>
     <string name="hot_badge">🔥 горячо — снизьте качество</string>
     <string name="back_again_to_stop">Нажмите «Назад» ещё раз, чтобы остановить</string>
+    <string name="media_audio_short">Дорожка</string>
+    <string name="media_subs_short">Субтитры</string>
+    <string name="media_quality">Качество</string>
 </resources>

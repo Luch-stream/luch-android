@@ -47,7 +47,7 @@ import java.util.Map;
 /**
  * Plays a {@link MediaCast} full screen with the platform's MediaPlayer (no libraries in the APK): progressive files
  * and HLS, the receiver's own pick of quality. The remote: OK or Play/Pause toggles, left/right skip, up shows the
- * controls, down or Menu opens speed, sound and subtitles, Back stops. Every change goes back as {@code media_state}.
+ * controls, down (or Menu, or a long OK) the buttons for sound track, subtitles, quality and speed, Back stops. Every change goes back as {@code media_state}.
  */
 public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     private final BackGuard backGuard = new BackGuard();
@@ -80,6 +80,15 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     /** Seeking held on the remote: where it will go once the key is let go, or -1. */
     private long seekTarget = -1;
     private AlertDialog menu;
+    private PlayerBar choices;
+    /** The screen while it exists, for tests. */
+    static volatile MediaActivity shown;
+    /** The source playing when the quality menu picked another; null for the cast's own pick. */
+    private String quality;
+    /** A subtitle to switch on again once a new quality has loaded its subtitles. */
+    private String subAfterSwitch;
+    private static final long BAR_MS = 8000;
+    private final Runnable closeBar = this::closeBar;
 
     private final Runnable reporter = new Runnable() {
         @Override
@@ -93,7 +102,9 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         if ("loading".equals(state) && !prepared) fail("did not load in " + LOAD_MS / 1000 + " s");
     };
     private final Runnable hideOsd = () -> {
-        if (seekTarget < 0 && "playing".equals(state)) osd.animate().alpha(0f).setDuration(300).start();
+        if (seekTarget < 0 && "playing".equals(state) && !choices.isOpen()) {
+            osd.animate().alpha(0f).setDuration(300).start();
+        }
     };
     private final Runnable tickOsd = new Runnable() {
         @Override
@@ -147,9 +158,16 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         badge = Ui.text(this, "", 16, Ui.AMBER, true);
         row.addView(badge);
         osd.addView(row);
+        choices = new PlayerBar(this);
+        choices.setVisibility(View.GONE);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        cp.topMargin = Ui.dp(this, 16);
+        osd.addView(choices, cp);
         root.addView(osd, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
         setContentView(root);
+        shown = this;
 
         MediaCast m = MediaCast.current;
         if (m == null) {
@@ -182,6 +200,8 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         externalLabels.clear();
         firstExternal = -1;
         subTrack = -1;
+        quality = null;
+        subAfterSwitch = null;
         ended = false;
         rate = m.rate;
         wantPlaying = !m.paused;
@@ -210,7 +230,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             p.setDisplay(surface.getHolder());
             p.setScreenOnWhilePlaying(true);
             Map<String, String> headers = m.headers;
-            p.setDataSource(this, Uri.parse(m.url), headers);
+            p.setDataSource(this, Uri.parse(quality != null ? quality : m.url), headers);
             p.setOnPreparedListener(mp -> {
                 if (mp != player) return;
                 prepared = true;
@@ -306,6 +326,10 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
                     } catch (Exception e) {
                         Log.w(LuchService.TAG, "subtitle add: " + e);
                     }
+                }
+                if (subAfterSwitch != null) {
+                    selectSub(subAfterSwitch);
+                    subAfterSwitch = null;
                 }
                 report(null);
             });
@@ -614,31 +638,128 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         surface.setLayoutParams(lp);
     }
 
-    private void openMenu() {
+    /** The buttons under the video, the focus on speed; they close by themselves when left alone. */
+    private void openBar() {
         if (menu != null && menu.isShowing()) return;
-        List<String> items = new ArrayList<>();
-        items.add(getString(R.string.media_speed, speed(rate)));
-        JSONObject s;
+        JSONObject st;
         try {
-            s = stateJson(null);
+            st = stateJson(null);
         } catch (JSONException e) {
             return;
         }
-        JSONArray audio = s.optJSONObject("tracks").optJSONArray("audio");
-        JSONArray subs = s.optJSONObject("tracks").optJSONArray("sub");
-        boolean hasAudio = audio != null && audio.length() > 1;
-        boolean hasSubs = subs != null && subs.length() > 0;
-        if (hasAudio) items.add(getString(R.string.media_audio));
-        if (hasSubs) items.add(getString(R.string.media_subs));
+        JSONArray audio = st.optJSONObject("tracks").optJSONArray("audio");
+        JSONArray subs = st.optJSONObject("tracks").optJSONArray("sub");
+        JSONObject sel = st.optJSONObject("sel");
+        String selAudio = sel.isNull("audio") ? null : sel.optString("audio");
+        String selSub = sel.isNull("sub") ? null : sel.optString("sub");
+        List<PlayerBar.Choice> list = new ArrayList<>();
+        if (audio != null && audio.length() > 1) {
+            list.add(new PlayerBar.Choice(getString(R.string.media_audio_short), label(audio, selAudio, "—"),
+                    () -> trackMenu(audio, "audio", selAudio, false)));
+        }
+        if (subs != null && subs.length() > 0) {
+            list.add(new PlayerBar.Choice(getString(R.string.media_subs_short),
+                    label(subs, selSub, getString(R.string.media_subs_off)), () -> trackMenu(subs, "sub", selSub, true)));
+        }
+        MediaCast m = cast;
+        if (m != null && m.qualities.size() > 1) {
+            list.add(new PlayerBar.Choice(getString(R.string.media_quality), MediaLink.qualityLabel(currentQuality(m)),
+                    this::qualityMenu));
+        }
+        list.add(new PlayerBar.Choice(getString(R.string.media_speed_title), speed(rate), this::speedMenu));
+        choices.show(list);
+        showOsd();
+        main.removeCallbacks(hideOsd);
+        keepBar();
+    }
+
+    /** The focused button's label while the buttons are open, else null (for tests). */
+    String focusedButton() {
+        return choices.isOpen() ? choices.focusedLabel() : null;
+    }
+
+    private void keepBar() {
+        main.removeCallbacks(closeBar);
+        main.postDelayed(closeBar, BAR_MS);
+    }
+
+    private void closeBar() {
+        main.removeCallbacks(closeBar);
+        if (!choices.isOpen()) return;
+        choices.hide();
+        showOsd();
+    }
+
+    private static String label(JSONArray tracks, String id, String none) {
+        for (int i = 0; tracks != null && id != null && i < tracks.length(); i++) {
+            JSONObject t = tracks.optJSONObject(i);
+            if (id.equals(t.optString("id"))) return t.optString("label");
+        }
+        return none;
+    }
+
+    private JSONObject currentQuality(MediaCast m) {
+        String url = quality != null ? quality : m.url;
+        for (JSONObject q : m.qualities) if (url.equals(q.optString("url"))) return q;
+        return m.qualities.get(0);
+    }
+
+    private void qualityMenu() {
+        MediaCast m = cast;
+        if (m == null) return;
+        String[] labels = new String[m.qualities.size()];
+        JSONObject now = currentQuality(m);
+        int chosen = 0;
+        for (int i = 0; i < labels.length; i++) {
+            labels[i] = MediaLink.qualityLabel(m.qualities.get(i));
+            if (m.qualities.get(i) == now) chosen = i;
+        }
+        choose(getString(R.string.media_quality), labels, chosen, which -> switchQuality(m.qualities.get(which)));
+    }
+
+    /** Another source of the same video, from where it is now, playing or paused as it was, its subtitle kept. */
+    private void switchQuality(JSONObject q) {
+        MediaCast m = cast;
+        String url = q.optString("url");
+        if (m == null || url.equals(quality != null ? quality : m.url)) return;
+        try {
+            JSONObject sel = stateJson(null).optJSONObject("sel");
+            subAfterSwitch = sel.isNull("sub") ? null : sel.optString("sub");
+        } catch (JSONException e) {
+            subAfterSwitch = null;
+        }
+        if (prepared) resumeAt = position();
+        quality = url;
+        releasePlayer();
+        externalSubs.clear();
+        externalLabels.clear();
+        firstExternal = -1;
+        subTrack = -1;
+        subtitle.setText("");
+        state = "loading";
+        message.setText(getString(R.string.media_loading));
+        main.removeCallbacks(loadTimeout);
+        main.postDelayed(loadTimeout, LOAD_MS);
+        report(null);
+        if (surfaceReady) open();
+    }
+
+    /** What a list does with the row picked (java.util.function is Android 7+). */
+    private interface Pick {
+        void at(int index);
+    }
+
+    /** One list to pick from, the current one marked; the bar closes once something is picked. */
+    private void choose(String title, String[] labels, int chosen, Pick pick) {
+        main.removeCallbacks(closeBar);
         menu = new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-                .setItems(items.toArray(new String[0]), (d, which) -> {
-                    String chosen = items.get(which);
-                    if (which == 0) speedMenu();
-                    else if (chosen.equals(getString(R.string.media_audio))) trackMenu(audio, "audio",
-                            s.optJSONObject("sel").optString("audio"), false);
-                    else trackMenu(subs, "sub", s.optJSONObject("sel").isNull("sub") ? null
-                                : s.optJSONObject("sel").optString("sub"), true);
+                .setTitle(title)
+                .setSingleChoiceItems(labels, chosen, (d, which) -> {
+                    pick.at(which);
+                    d.dismiss();
+                    closeBar();
                 })
+                .setOnCancelListener(d -> keepBar())
                 .create();
         menu.show();
     }
@@ -650,17 +771,12 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             labels[i] = speed(RATES[i]);
             if (RATES[i] == rate) chosen = i;
         }
-        menu = new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-                .setTitle(R.string.media_speed_title)
-                .setSingleChoiceItems(labels, chosen, (d, which) -> {
-                    try {
-                        command(new JSONObject().put("do", "rate").put("rate", (double) RATES[which]), "receiver");
-                    } catch (JSONException ignored) {
-                    }
-                    d.dismiss();
-                })
-                .create();
-        menu.show();
+        choose(getString(R.string.media_speed_title), labels, chosen, which -> {
+            try {
+                command(new JSONObject().put("do", "rate").put("rate", (double) RATES[which]), "receiver");
+            } catch (JSONException ignored) {
+            }
+        });
     }
 
     private void trackMenu(JSONArray tracks, String kind, String selected, boolean offItem) {
@@ -676,25 +792,36 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             ids.add(t.optString("id"));
             if (t.optString("id").equals(selected)) chosen = labels.size() - 1;
         }
-        menu = new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
-                .setTitle(kind.equals("audio") ? R.string.media_audio : R.string.media_subs)
-                .setSingleChoiceItems(labels.toArray(new String[0]), chosen, (d, which) -> {
+        choose(getString(kind.equals("audio") ? R.string.media_audio : R.string.media_subs),
+                labels.toArray(new String[0]), chosen, which -> {
                     try {
                         JSONObject c = new JSONObject().put("do", kind);
                         c.put("id", ids.get(which) == null ? JSONObject.NULL : ids.get(which));
                         command(c, "receiver");
                     } catch (JSONException ignored) {
                     }
-                    d.dismiss();
-                })
-                .create();
-        menu.show();
+                });
     }
 
     // ---- the remote ----------------------------------------------------------------------------------------
 
     @Override
     public boolean onKeyDown(int key, KeyEvent e) {
+        if (choices.isOpen()) {
+            keepBar();
+            switch (key) {
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    return false; // the focus moves between the buttons
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    closeBar();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    return true;
+                default:
+                    break;
+            }
+        }
         switch (key) {
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
@@ -723,7 +850,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
                 return true;
             case KeyEvent.KEYCODE_DPAD_DOWN:
             case KeyEvent.KEYCODE_MENU:
-                openMenu();
+                openBar();
                 return true;
             default:
                 return super.onKeyDown(key, e);
@@ -733,7 +860,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     public boolean onKeyLongPress(int key, KeyEvent e) {
         if (key == KeyEvent.KEYCODE_DPAD_CENTER || key == KeyEvent.KEYCODE_ENTER) {
-            openMenu();
+            openBar();
             return true;
         }
         return super.onKeyLongPress(key, e);
@@ -807,6 +934,10 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             menu.dismiss();
             return;
         }
+        if (choices.isOpen()) {
+            closeBar();
+            return;
+        }
         if (!backGuard.confirm(this)) return;
         MediaCast m = cast;
         if (m != null) m.endedHere("back");
@@ -857,6 +988,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
 
     @Override
     protected void onDestroy() {
+        if (shown == this) shown = null;
         main.removeCallbacksAndMessages(null);
         if (menu != null) menu.dismiss();
         releasePlayer();

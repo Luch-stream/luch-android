@@ -193,6 +193,49 @@ public class MediaCastTest {
     }
 
     /** Another quality of the same video from the same sender: no stop, the new one plays from where it is asked. */
+    /** Down opens the buttons with speed chosen: OK, one down, OK is the next speed up. */
+    @Test
+    public void downOpensTheButtonsOnSpeed() throws Exception {
+        sender.send(media());
+        state(m -> m.optString("state").equals("playing"), "playing");
+        shell("input keyevent KEYCODE_DPAD_DOWN");
+        waitFor(() -> MediaActivity.shown != null && MediaActivity.shown.focusedButton() != null, 3_000, "the buttons");
+        assertTrue(MediaActivity.shown.focusedButton(), MediaActivity.shown.focusedButton().startsWith("Speed"));
+        shell("input keyevent KEYCODE_DPAD_CENTER");
+        SystemClock.sleep(500);
+        shell("input keyevent KEYCODE_DPAD_DOWN");
+        shell("input keyevent KEYCODE_DPAD_CENTER");
+        state(m -> Math.abs(m.optDouble("rate") - 1.25) < 0.01, "1.25x after down, OK, down, OK");
+    }
+
+    /** Two qualities: the button left of speed lists them; the other one plays on from about where it was. */
+    @Test
+    public void qualityIsPickedOnTheTv() throws Exception {
+        sender.send(new JSONObject().put("t", "media").put("via", "sender").put("title", "Two qualities")
+                .put("src", new JSONArray()
+                        .put(new JSONObject().put("url", http.url("clip.mp4?q=720")).put("mime", "video/mp4")
+                                .put("w", 1280).put("h", 720))
+                        .put(new JSONObject().put("url", http.url("clip.mp4?q=360")).put("mime", "video/mp4")
+                                .put("w", 640).put("h", 360))));
+        state(m -> m.optString("state").equals("playing") && m.getDouble("pos") > 1, "playing a while");
+        assertTrue("the bigger one first", http.requests.contains("clip.mp4?q=720"));
+        shell("input keyevent KEYCODE_DPAD_DOWN");
+        waitFor(() -> MediaActivity.shown != null && MediaActivity.shown.focusedButton() != null, 3_000, "the buttons");
+        shell("input keyevent KEYCODE_DPAD_LEFT");
+        SystemClock.sleep(300);
+        assertEquals("Quality  ·  720p", MediaActivity.shown.focusedButton());
+        double before = sample()[1];
+        shell("input keyevent KEYCODE_DPAD_CENTER");
+        SystemClock.sleep(500);
+        shell("input keyevent KEYCODE_DPAD_DOWN");
+        shell("input keyevent KEYCODE_DPAD_CENTER");
+        waitFor(() -> http.requests.contains("clip.mp4?q=360"), 5_000, "the other quality fetched");
+        JSONObject again = state(m -> m.optString("state").equals("playing"), "playing again");
+        assertTrue("from where it was, not the start: " + again.getDouble("pos") + " vs " + before,
+                again.getDouble("pos") >= before - 1);
+        assertNotNull("still the same cast", MediaCast.current);
+    }
+
     @Test
     public void theSameSenderSwitchesQualityWithoutAStop() throws Exception {
         sender.send(media());

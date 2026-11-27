@@ -29,6 +29,8 @@ final class MediaCast {
     final float rate;
     final boolean paused;
     final List<JSONObject> subs = new ArrayList<>();
+    /** The sources this receiver may play, biggest first; the first is {@link #url}. The quality menu's choices. */
+    final List<JSONObject> qualities = new ArrayList<>();
     /** Commands that came before the player was ready, applied once it is. */
     private final List<JSONObject> early = new ArrayList<>();
     private MediaActivity player;
@@ -53,11 +55,21 @@ final class MediaCast {
     static void open(Context context, MirrorSession.Control control, String sender, JSONObject msg)
             throws MediaLink.BadLink, NoSource {
         int[] screen = screen(context);
-        JSONObject src = MediaLink.pick(msg.optJSONArray("src"), Luch.decoders(), screen[0], screen[1]);
-        if (src == null) throw new NoSource();
+        List<JSONObject> choices = MediaLink.choices(msg.optJSONArray("src"), Luch.decoders(), screen[0], screen[1]);
+        if (choices.isEmpty()) throw new NoSource();
         boolean direct = !"sender".equals(msg.optString("via", "direct"));
+        JSONObject src = choices.get(0);
         MediaLink.check(src.optString("url"), sender, direct, MediaLink.SYSTEM_DNS);
         MediaCast m = new MediaCast(control, sender, msg, src.optString("url"));
+        m.qualities.add(src);
+        for (JSONObject q : choices.subList(1, choices.size())) {
+            try {
+                MediaLink.check(q.optString("url"), sender, direct, MediaLink.SYSTEM_DNS);
+                m.qualities.add(q);
+            } catch (MediaLink.BadLink skip) {
+                // a quality that may not be fetched is not offered
+            }
+        }
         JSONArray subs = msg.optJSONArray("subs");
         for (int i = 0; subs != null && i < subs.length() && i < 20; i++) {
             JSONObject s = subs.optJSONObject(i);

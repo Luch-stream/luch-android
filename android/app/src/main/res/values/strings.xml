@@ -107,7 +107,6 @@
     <string name="media_loading">Loading…</string>
     <string name="media_failed">Could not play this video</string>
     <string name="media_paused">Paused</string>
-    <string name="media_speed">Speed: %s</string>
     <string name="media_speed_title">Speed</string>
     <string name="media_audio">Sound track</string>
     <string name="media_subs">Subtitles</string>
@@ -126,4 +125,7 @@
     <string name="sound_android10">Android 10 or newer</string>
     <string name="hot_badge">🔥 hot — lower the quality</string>
     <string name="back_again_to_stop">Press Back again to stop</string>
+    <string name="media_audio_short">Audio</string>
+    <string name="media_subs_short">Subtitles</string>
+    <string name="media_quality">Quality</string>
 </resources>

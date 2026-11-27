@@ -75,7 +75,7 @@ final class TestHttp implements AutoCloseable {
                 requests.add(path);
                 byte[] body;
                 try {
-                    body = file(path);
+                    body = file(path.split("\\?")[0]); // a query makes another link to the same file
                 } catch (IOException missing) {
                     out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
                     out.flush();
