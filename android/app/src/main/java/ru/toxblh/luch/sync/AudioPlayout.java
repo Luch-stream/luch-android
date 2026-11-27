@@ -38,7 +38,7 @@ public final class AudioPlayout {
 
     static final double KP = 0.1, KI = 0.005;   // s⁻¹, s⁻²
     static final double MAX_RATE = 0.001;       // 0.1 %
-    static final long HARD_NS = 20_000_000L, DEAD_NS = 200_000L, FADE_NS = 3_000_000L;
+    static final long HARD_NS = 20_000_000L, DEAD_NS = 200_000L, FADE_NS = 3_000_000L, STEP_NS = 2_000_000L;
 
     private final int rate, channels, fadeFrames;
     private final TreeMap<Long, short[]> queue = new TreeMap<>();
@@ -46,6 +46,11 @@ public final class AudioPlayout {
     /** The playout delay D of the chunk being written (µs): each chunk carries its own, so a change hits one frame. */
     private long curDelay;
     private long nextSeq = -1;
+    /** Chunks in a row that came after their time, for this long, start the playout again on what arrives. */
+    static final long STALE_REALIGN_US = 1_000_000;
+    private int staleRun;
+    private boolean realign;
+    private long lastDelay = -1;
     private short[] cur;
     private long curSeq, curPts;
     private int curPos, curFrames;
@@ -57,7 +62,7 @@ public final class AudioPlayout {
     private long lastNs = Long.MIN_VALUE;
     private double lastErrorNs;
     private int hardResyncs, concealed, dropped, repeated;
-    private long lastHardSeq = -1;
+    private long lastHardSeq = -1, lastHardErrorNs;
     private short[] work = new short[0];
     private final short[] prev;
     private boolean havePrev;
@@ -71,7 +76,21 @@ public final class AudioPlayout {
 
     /** A decoded chunk: its frame sequence (unwrapped), its pts on the sender's clock (µs, unwrapped), its PCM. */
     public void push(long seq, long ptsUs, long delayUs, short[] pcm) {
-        if (nextSeq >= 0 && seq < nextSeq) return;   // too late: its time went by as silence
+        if (nextSeq >= 0 && seq < nextSeq) {
+            // Too late: its time went by as silence. A second of them in a row (not a burst held by power save) means
+            // D is too small for this receiver, until the sender raises it from this receiver's need: start again
+            // from what arrives, with a hard resync.
+            staleRun++;
+            if (chunkUs <= 0 || staleRun * chunkUs < STALE_REALIGN_US) return;
+            staleRun = 0;
+            queue.clear();
+            ptsOf.clear();
+            delayOf.clear();
+            silenceLeft = skipLeft = fadeOutLeft = 0;
+            cur = null;
+            nextSeq = seq;
+            realign = true;
+        }
         queue.put(seq, pcm);
         ptsOf.put(seq, ptsUs);
         delayOf.put(seq, delayUs);
@@ -161,6 +180,7 @@ public final class AudioPlayout {
         long first = queue.firstKey();
         if (nextSeq < 0) nextSeq = first;
         if (first == nextSeq) {
+            staleRun = 0;
             cur = queue.remove(first);
             curPts = ptsOf.remove(first);
             curDelay = delayOf.remove(first);
@@ -179,14 +199,15 @@ public final class AudioPlayout {
         return concealIfDue(out, want);
     }
 
-    private long framesPerChunk = -1, chunkUs = -1;
+    /** The sender's chunk duration, from the pts of consecutive chunks (the first one may be short of frames). */
+    private long chunkUs = -1, prevSeq = -1, prevPts;
 
     private boolean concealIfDue(Output out, PtsToLocal want) {
-        if (framesPerChunk <= 0) return false;
+        if (chunkUs <= 0) return false;
         long missingPts = curPts + chunkUs;
         if (out.hearNs() < want.at(missingPts + curDelay) - HARD_NS) return false;   // still early enough to wait
         // Its time has come and it is not here: silence of its length, with a fade in after.
-        silenceLeft = (int) framesPerChunk;
+        silenceLeft = (int) Math.round(chunkUs * rate / 1e6);
         curPts = missingPts;
         nextSeq++;
         concealed++;
@@ -198,8 +219,10 @@ public final class AudioPlayout {
     /** Measures the error at a chunk's first frame and acts on it; false when it chose to write silence first. */
     private boolean beginChunk(Output out, long nowNs, PtsToLocal want, double skew) {
         long frames = curFrames;
-        if (framesPerChunk < 0) framesPerChunk = frames;
-        chunkUs = frames * 1_000_000L / rate;
+        if (prevSeq >= 0 && curSeq == prevSeq + 1 && curPts > prevPts) chunkUs = curPts - prevPts;
+        else if (chunkUs < 0) chunkUs = frames * 1_000_000L / rate;
+        prevSeq = curSeq;
+        prevPts = curPts;
         long e = out.hearNs() - want.at(curPts + curDelay);
         lastErrorNs = e;
         double dt = lastNs == Long.MIN_VALUE ? 0 : Math.min(1.0, (nowNs - lastNs) / 1e9);
@@ -207,12 +230,22 @@ public final class AudioPlayout {
         if (!aligned) {
             // The start: nothing was heard yet, so no fade out is needed.
             aligned = true;
+            lastDelay = curDelay;
             adjust(e);
             return skipLeft > 0;   // skipping goes on with this chunk; silence comes before it
         }
-        if (Math.abs(e) > HARD_NS) {
+        if (realign && Math.abs(e) <= HARD_NS) {
+            realign = false;   // back on time by itself (D rose meanwhile)
+        }
+        // A new D is deliberate and reaches every device on the same frame: it is taken at once there, not slewed
+        // in at 0.1 % for many seconds (unless it is below the PI's own reach).
+        boolean newDelay = lastDelay >= 0 && curDelay != lastDelay && Math.abs(e) > STEP_NS;
+        lastDelay = curDelay;
+        if (Math.abs(e) > HARD_NS || realign || newDelay) {
+            realign = false;
             hardResyncs++;
             lastHardSeq = curSeq;
+            lastHardErrorNs = e;
             fadeOutLeft = Math.min(fadeFrames, curFrames);
             fadeOutTotal = fadeOutLeft;
             pendingNs = e;   // the same after the fade: heard and wanted move on together
@@ -319,6 +352,11 @@ public final class AudioPlayout {
     /** The chunk at which the last hard resync happened (the same on every device for a change of D). */
     public long lastHardSeq() {
         return lastHardSeq;
+    }
+
+    /** The error that made the last hard resync, ns. */
+    public long lastHardErrorNs() {
+        return lastHardErrorNs;
     }
 
     public int concealed() {
