@@ -37,6 +37,9 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     private boolean statsOn;
     private SurfaceView video;
     private FrameLayout rootView;
+    /** The presenter's pointer and ink over the mirrored screen (PROTOCOL.md 4h): the video's bounds are the picture. */
+    private InkView ink;
+    private MirrorSession inked;
     /** How the picture meets the screen: 0 fit with bars, 1 fill and crop the edges, 2 stretch, 3 fit what is shown without its own black bars. */
     private int fitMode;
     private static final int MODES = 4;
@@ -80,6 +83,12 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
                 FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER));
         // The picture keeps its proportions on any screen (a phone is not 16:9): fit it in the window, bars on the sides.
         root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> fit(r - l, b - t));
+        ink = new InkView(this, out -> InkView.viewFrame(video, ink, out), () -> {
+            MirrorSession s = MirrorSession.current;
+            return s == null ? null : s.control;
+        });
+        root.addView(ink, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
         // Moonlight-style statistics in the corner, toggled with OK (or Info / Menu) and remembered.
         stats = new TextView(this);
         stats.setTypeface(Typeface.MONOSPACE);
@@ -323,6 +332,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     protected void onStart() {
         super.onStart();
         Luch.addListener(panelListener);
+        ink.toFront();
         stopped = false;
         handler.removeCallbacks(closeIfStillStopped);
         MirrorSession s = MirrorSession.current;
@@ -407,6 +417,10 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         if (s == null) {
             finish();
             return;
+        }
+        if (s != inked) {
+            inked = s;
+            ink.reset();
         }
         cropHandler.removeCallbacksAndMessages(null);
         analyzing = false;

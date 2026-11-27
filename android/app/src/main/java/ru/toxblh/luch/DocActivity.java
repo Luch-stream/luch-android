@@ -95,6 +95,8 @@ public class DocActivity extends Activity {
     private ScrollView scroll;
     private ImageView image;
     private TextView badge, message;
+    /** The presenter's pointer and ink over the page (PROTOCOL.md 4h). */
+    private InkView ink;
     private GestureDetector swipe;
     private PdfRenderer renderer;
     private ParcelFileDescriptor fd;
@@ -125,6 +127,11 @@ public class DocActivity extends Activity {
         message = Ui.text(this, getString(R.string.media_loading), 22, Ui.MUTED, false);
         root.addView(message, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        ink = new InkView(this, out -> InkView.imageFrame(image, ink, out), () -> {
+            Doc d = current;
+            return d == null ? null : d.control;
+        });
+        root.addView(ink, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
         swipe = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override
@@ -197,6 +204,7 @@ public class DocActivity extends Activity {
         loaded = d;
         d.pages = r.getPageCount();
         message.setVisibility(android.view.View.GONE);
+        ink.reset();
         try {
             d.control.send(new JSONObject().put("t", "doc_ready").put("pages", d.pages));
         } catch (JSONException ignored) {
@@ -265,6 +273,7 @@ public class DocActivity extends Activity {
         image.setLayoutParams(new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 byWidth ? ViewGroup.LayoutParams.WRAP_CONTENT : ViewGroup.LayoutParams.MATCH_PARENT));
         scroll.scrollTo(0, 0);
+        ink.setPage(p);
         badge.setText((p + 1) + " / " + r.getPageCount());
         badge.animate().cancel();
         badge.setAlpha(1f);
@@ -299,6 +308,15 @@ public class DocActivity extends Activity {
             case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
                 turn(-1);
                 return true;
+            case KeyEvent.KEYCODE_B:
+            case KeyEvent.KEYCODE_PERIOD:
+                // A presentation clicker's "black screen" key.
+                if (e.getRepeatCount() == 0) ink.setBlank(!ink.model.blank());
+                return true;
+            case KeyEvent.KEYCODE_F5:
+                // A clicker's "start the show": the show is already on, so it only brings the picture back.
+                if (ink.model.blank()) ink.setBlank(false);
+                return true;
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
                 if (e.getRepeatCount() == 0) toggleFit();
@@ -314,6 +332,12 @@ public class DocActivity extends Activity {
             default:
                 return super.onKeyDown(key, e);
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        ink.toFront();
     }
 
     @Override

@@ -285,6 +285,12 @@ final class ControlServer {
                     case "doc_page":
                         DocActivity.turnTo(control, msg.optInt("page"));
                         break;
+                    case "pointer":
+                    case "ink":
+                    case "blank":
+                        // Frequent and never answered (PROTOCOL.md 4h): only the sender of what is shown is obeyed.
+                        InkView.deliver(control, msg);
+                        break;
                     case "stop":
                         MirrorSession.stopFromSender(control);
                         PhotoSession.closeFrom(control);
@@ -392,7 +398,7 @@ final class ControlServer {
                 .put("model", Luch.model())
                 .put("decoders", new JSONArray(Luch.decoders()))
                 .put("max", Luch.maxSize())
-                .put("modes", new JSONArray().put("mirror").put("photo").put("media").put("audio").put("doc"))
+                .put("modes", new JSONArray().put("mirror").put("photo").put("media").put("audio").put("doc").put("ink"))
                 // The TV's own apps it can open with a link (PROTOCOL.md, section 4f).
                 .put("apps", Remote.apps(context))
                 // What "media" plays here (PROTOCOL.md, section 4b).
