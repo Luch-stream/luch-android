@@ -171,6 +171,10 @@ final class ControlServer {
                         // The sender's answer to something of ours; answering it would only bounce errors back.
                         Log.i(LuchService.TAG, "sender says: " + msg);
                         break;
+                    case "probe":
+                        // The acoustic calibration (PROTOCOL.md 4h): only as a dry run, and only when turned on.
+                        send(out, Calibration.answer(context, msg));
+                        break;
                     case "offset": {
                         MirrorSession m = MirrorSession.current;
                         if (m != null && m.control == control) m.onOffset(msg);

@@ -56,6 +56,10 @@
     <string name="setting_sleep">Выключение с компьютера</string>
     <string name="setting_sleep_set_up">Настроить</string>
     <string name="setting_sleep_on">Включено</string>
+    <string name="setting_calibration">Проверка калибровки синхронизации (без звука)</string>
+    <string name="calibration_run">Запустить проверку: запись синтезирована, ничего не звучит</string>
+    <string name="calibration_measured">Измерено %1$.2f мс (на самом деле %2$.2f мс), свипы на %3$.0f дБ громче шума</string>
+    <string name="calibration_refused">Отказ: %1$s</string>
     <string name="settings">Настройки</string>
     <string name="app_title">Луч</string>
     <string name="senders_nearby">Отправители рядом</string>

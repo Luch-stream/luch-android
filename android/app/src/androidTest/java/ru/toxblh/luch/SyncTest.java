@@ -128,4 +128,31 @@ public class SyncTest {
         assertTrue(last.toString(), vpts > 0 && vpts < 100);
         assertFalse(last.toString(), last.getJSONObject("out").has("video_err_ms"));
     }
+
+    /** The calibration never makes a sound here: refused while its setting is off, a dry run while it is on. */
+    @Test
+    public void aProbeIsRefusedOrOnlyADryRun() throws Exception {
+        android.content.Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        JSONObject probe = new JSONObject().put("t", "probe").put("id", "p1").put("at", 1_000_000).put("n", 4)
+                .put("ms", 200).put("gap_ms", 500).put("gain", 0.3);
+        sender.send(probe);
+        JSONObject m = sender.next(3_000);
+        assertEquals(m.toString(), "probe_off", m.optString("code"));
+        Calibration.setEnabled(c, true);
+        try {
+            sender.send(probe);
+            m = sender.next(3_000);
+            assertEquals(m.toString(), "probe_done", m.getString("t"));
+            assertTrue(m.getBoolean("dry_run"));
+            assertEquals(1_700_000, m.getJSONArray("played").getLong(1));
+            // The detector itself, on this device, on a recording made up in memory.
+            ru.toxblh.luch.sync.DryRun.Outcome o = ru.toxblh.luch.sync.DryRun.run(42);
+            Log.i("LuchTest", "dry run: measured " + o.measuredMs + " ms, true " + o.trueMs + " ms, " + o.psrDb
+                    + " dB, took " + o.tookMs + " ms");
+            assertTrue(o.why, o.accepted);
+            assertEquals(o.trueMs, o.measuredMs, 0.1);
+        } finally {
+            Calibration.setEnabled(c, false);
+        }
+    }
 }

@@ -130,4 +130,82 @@ public class AudioSimTest {
         assertEquals(log, "head", tablet.audioClock.source());
         assertEquals(log, 15_000, mean, 1000);
     }
+
+    /**
+     * The whole mix of docs: sync, section 5, with what the platform cannot see: a TV's ARC soundbar (60 ms), a
+     * projector's processing (80 ms), a tablet without timestamps (15 ms beyond its guess), a Bluetooth speaker whose
+     * report misses 30 ms; each in its own place in the room. First as the platform reports it (the fallback), then
+     * after one calibration: each device's sweeps through its room to one microphone, measured by Probe.
+     */
+    @Test
+    public void theWholeMixIsWithinTwoMillisecondsAtTheMicrophoneOnceCalibrated() {
+        String[] names = {"phone", "tv + soundbar", "projector", "tablet", "bt speaker"};
+        double[] reported = {15, 40, 30, 20, 200}, hidden = {0, 60, 80, 15, 30};
+        boolean[] ts = {true, true, true, false, true};
+        SimRoom[] rooms = new SimRoom[names.length];
+        java.util.function.LongFunction<SimGroup> mix = seed -> {
+            SimGroup g = new SimGroup();
+            for (int i = 0; i < names.length; i++) {
+                g.devices.add(device(names[i], seed + i, reported[i], hidden[i], ts[i], false));
+            }
+            return g;
+        };
+        for (int i = 0; i < names.length; i++) rooms[i] = new SimRoom(new Random(900 + i));
+        // Fallback: the platform's numbers only. At the microphone each device is off by what it hides plus its way.
+        SimGroup fallback = mix.apply(60);
+        fallback.run(300e6, 60e6, 0.5e6);
+        double[] atMic = new double[names.length];
+        StringBuilder log = new StringBuilder("whole mix, fallback (no calibration), error at the microphone:");
+        for (int i = 0; i < names.length; i++) {
+            atMic[i] = fallback.meanError(i, 0, 1) + rooms[i].travel() * 1e6;
+            log.append(String.format(Locale.US, " %s %.1f ms;", names[i], atMic[i] / 1000));
+        }
+        double fallbackSpread = spread(atMic);
+        log.append(String.format(Locale.US, " spread %.1f ms", fallbackSpread / 1000));
+        // Calibration: what Probe measures from each device's recording; everyone is made as late as the slowest.
+        Probe probe = new Probe(SimRoom.RATE);
+        Fft fft = new Fft(32768);
+        double[] c = new double[names.length];
+        for (int i = 0; i < names.length; i++) {
+            double delayS = atMic[i] / 1e6;
+            double[] sch = new double[4];
+            int[] pos = new int[4];
+            double exact = delayS * SimRoom.RATE;
+            for (int k = 0; k < 4; k++) {
+                sch[k] = SimRoom.RATE / 2 + k * (int) (0.7 * SimRoom.RATE);
+                pos[k] = (int) Math.floor(sch[k] + exact);
+            }
+            float[] rec = SimRoom.place(4 * SimRoom.RATE, rooms[i].response(exact - Math.floor(exact), 0.3, fft), pos);
+            rooms[i].addFans(rec, 5, 0.3);   // the projector's fan, the fridge: 5 dB
+            Probe.Result res = probe.measure(rec, sch, 150);
+            assertTrue(names[i] + ": " + res.why, res.accepted);
+            c[i] = res.delayMs(SimRoom.RATE) * 1000;
+        }
+        double slowest = java.util.Arrays.stream(c).max().getAsDouble();
+        SimGroup calibrated = mix.apply(60);
+        for (int i = 0; i < names.length; i++) calibrated.devices.get(i).offsetNs = (slowest - c[i]) * 1000;
+        calibrated.run(300e6, 60e6, 0.5e6);
+        log.append("; calibrated:");
+        double[] after = new double[names.length];
+        for (int i = 0; i < names.length; i++) {
+            after[i] = calibrated.meanError(i, 0, 1) + rooms[i].travel() * 1e6;
+            log.append(String.format(Locale.US, " %s %.2f ms;", names[i], after[i] / 1000));
+        }
+        double calSpread = spread(after);
+        log.append(String.format(Locale.US, " spread %.2f ms (D + %.0f ms for everyone)", calSpread / 1000,
+                slowest / 1000));
+        System.out.println("audio " + log);
+        assertTrue(log.toString(), calSpread < 2000);
+        // The fallback's cost is what the platform does not see: here about the 80 ms of the projector.
+        assertTrue(log.toString(), fallbackSpread > 60_000);
+    }
+
+    private static double spread(double[] v) {
+        double lo = Double.MAX_VALUE, hi = -Double.MAX_VALUE;
+        for (double x : v) {
+            lo = Math.min(lo, x);
+            hi = Math.max(hi, x);
+        }
+        return hi - lo;
+    }
 }

@@ -277,6 +277,12 @@ sender   → {"t":"offset","ms":<signed>}       this receiver's own correction, 
   a second after 30 s well below. Interactive: the picture at once (D = 0 on video packets) and the sound at the later
   of its own need and the TVs' `video_pts_ms`; only a speaker slower than the picture plus `tolerance_ms` holds the
   picture, by the excess.
+- **Calibration.** What the platform cannot see (an ARC soundbar's DSP, a projector's processing) is measured by
+  sound: each receiver plays 2–6 kHz log sweeps at times on the sender's clock, one microphone records, and the
+  sender sets `offset` so that all arrive together. `{"t":"probe","id":"..","at":<sender µs>,"signal":"sweep",
+  "f0":2000,"f1":6000,"ms":200,"n":4,"gap_ms":500,"gain":0.3}` is answered with `{"t":"probe_done","id":"..",
+  "played":[<sender µs>..]}`. This version answers only as a dry run (`"dry_run":true`, nothing played) and only when
+  the receiver's setting for it is on (welcome `sync.probe`); otherwise `{"t":"error","code":"probe_off"}`.
 - **Receiver rules.** The sound plays at `pts + D + offset`: silence or a skip with 3 ms fades beyond 20 ms of error,
   below it single frames dropped or repeated at most 0.1 %; a chunk not there in time is silence of its length. A
   picture is released at `pts + D + offset − P/2` (P the display period), so the VSYNC at or after lands on it.

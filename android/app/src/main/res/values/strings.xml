@@ -58,6 +58,10 @@
     <string name="setting_sleep">Turn off from a computer</string>
     <string name="setting_sleep_set_up">Set up</string>
     <string name="setting_sleep_on">On</string>
+    <string name="setting_calibration">Sync calibration test (dry run, makes no sound)</string>
+    <string name="calibration_run">Run the dry run: a synthesised recording, nothing is played</string>
+    <string name="calibration_measured">Measured %1$.2f ms (true %2$.2f ms), the sweeps %3$.0f dB over the noise</string>
+    <string name="calibration_refused">Refused: %1$s</string>
     <string name="app_title">Luch</string>
     <string name="senders_nearby">Senders nearby</string>
     <string name="visible_as_phone">The phone is visible on the network as</string>

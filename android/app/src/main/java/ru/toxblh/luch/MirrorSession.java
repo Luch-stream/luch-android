@@ -802,7 +802,8 @@ final class MirrorSession {
                             resyncsSeen = playout.hardResyncs();
                             Log.i(LuchService.TAG, "audio resync at chunk " + playout.lastHardSeq() + ": error "
                                     + Math.round(playout.lastErrorNs() / 1e5) / 10.0 + " ms, clock jumps "
-                                    + out.clock.jumps() + ", underruns " + track.getUnderrunCount());
+                                    + out.clock.jumps() + (Build.VERSION.SDK_INT >= 24
+                                    ? ", underruns " + track.getUnderrunCount() : ""));
                         }
                     }
                 }

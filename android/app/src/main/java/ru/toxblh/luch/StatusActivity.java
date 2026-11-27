@@ -881,7 +881,33 @@ public class StatusActivity extends Activity {
             card.addView(line, lp);
             card.addView(sleepRow());
         }
+        // Sync's acoustic calibration, as a dry run only: off unless turned on, and even then it never plays or listens.
+        View line = new View(this);
+        line.setBackgroundColor(Ui.DIVIDER);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        lp.setMargins(dp(20), 0, dp(20), 0);
+        card.addView(line, lp);
+        card.addView(switchRow(getString(R.string.setting_calibration), Calibration.enabled(this), (b, on) -> {
+            Calibration.setEnabled(this, on);
+            render();
+        }));
+        if (Calibration.enabled(this)) card.addView(dryRunRow());
         content.addView(card, Ui.below(this, 20));
+    }
+
+    /** Runs the calibration's detector on a recording made up in memory, and says what it found. */
+    private View dryRunRow() {
+        TextView t = Ui.text(this, getString(R.string.calibration_run), 15, Ui.AMBER, true);
+        t.setPadding(dp(20), dp(14), dp(20), dp(14));
+        t.setFocusable(true);
+        t.setClickable(true);
+        t.setOnClickListener(v -> new Thread(() -> {
+            ru.toxblh.luch.sync.DryRun.Outcome o = ru.toxblh.luch.sync.DryRun.run(System.nanoTime());
+            String text = o.accepted ? getString(R.string.calibration_measured, o.measuredMs, o.trueMs, o.psrDb)
+                    : getString(R.string.calibration_refused, o.why);
+            runOnUiThread(() -> t.setText(text));
+        }, "luch-calibration-dry-run").start());
+        return t;
     }
 
     /** Turning the TV off from a computer: on, or a way to the accessibility switch that turns it on. */
