@@ -876,14 +876,27 @@ public class StatusActivity extends Activity {
         askBluetoothOnce();
     }
 
-    /** Android 12+ asks for "Nearby devices" before an app may advertise; once, and the TV works without it. */
+    /**
+     * Android 12+ asks for "Nearby devices" before an app may advertise, and "direct" (PROTOCOL.md 4m) needs Wi-Fi
+     * Direct's permission and Bluetooth's connect; each asked once, in one dialog, and the TV works without them.
+     */
     private void askBluetoothOnce() {
-        if (Build.VERSION.SDK_INT < 31 || !Nearby.NO_PERMISSION.equals(Nearby.unavailable(this))) return;
+        if (Build.VERSION.SDK_INT < Direct.MIN_SDK || getIntent().getBooleanExtra("demo", false)) return;
         android.content.SharedPreferences prefs = getSharedPreferences("luch", MODE_PRIVATE);
-        if (prefs.getBoolean("nearby_asked", false) || getIntent().getBooleanExtra("demo", false)) return;
-        prefs.edit().putBoolean("nearby_asked", true).apply();
-        requestPermissions(new String[] {"android.permission.BLUETOOTH_ADVERTISE", "android.permission.BLUETOOTH_SCAN"},
-                REQUEST_NEARBY);
+        java.util.List<String> ask = new java.util.ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 31 && Nearby.NO_PERMISSION.equals(Nearby.unavailable(this))
+                && !prefs.getBoolean("nearby_asked", false)) {
+            prefs.edit().putBoolean("nearby_asked", true).apply();
+            ask.add("android.permission.BLUETOOTH_ADVERTISE");
+            ask.add("android.permission.BLUETOOTH_SCAN");
+        }
+        if (DirectGroup.worthAsking(this) && !prefs.getBoolean("direct_asked", false)) {
+            prefs.edit().putBoolean("direct_asked", true).apply();
+            for (String p : Direct.permissions(Build.VERSION.SDK_INT)) {
+                if (checkSelfPermission(p) != android.content.pm.PackageManager.PERMISSION_GRANTED) ask.add(p);
+            }
+        }
+        if (!ask.isEmpty()) requestPermissions(ask.toArray(new String[0]), REQUEST_NEARBY);
     }
 
     private static final int REQUEST_NEARBY = 80;

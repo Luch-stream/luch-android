@@ -13,8 +13,10 @@ import java.util.Locale;
  * 3..7   id              the first 4 bytes of the id (its first 8 hex digits)
  * 7..11  IPv4            receiver only
  * 11..13 port            receiver only, big-endian
+ * 13..15 PSM             Bluetooth only: the L2CAP channel for "direct" (PROTOCOL.md 4m), 0 = none
  * 13..17 token           the one-time pairing token: sound only, never over Bluetooth
  * </pre>
+ * The length tells the last two apart: 15 bytes carry a PSM, 17 a token.
  */
 final class Card {
     static final int RECEIVER = 1;
@@ -30,13 +32,20 @@ final class Card {
     final int port;
     /** 8 lowercase hex digits, or null. */
     final String token;
+    /** The L2CAP PSM of a receiver that offers "direct" over Bluetooth, 0 for none. */
+    final int psm;
 
     Card(int kind, String id, String host, int port, String token) {
+        this(kind, id, host, port, token, 0);
+    }
+
+    Card(int kind, String id, String host, int port, String token, int psm) {
         this.kind = kind;
         this.id = shortId(id);
         this.host = host;
         this.port = port;
         this.token = token;
+        this.psm = psm;
     }
 
     static String shortId(String id) {
@@ -46,8 +55,11 @@ final class Card {
 
     byte[] encode() {
         byte[] ip = host == null ? null : ipv4(host);
+        // A PSM needs the address bytes before it: 0.0.0.0:0 when this receiver has no usable LAN address.
+        if (ip == null && psm != 0) ip = new byte[4];
         byte[] tok = token == null ? null : hex4(token);
-        int len = ip == null ? 7 : tok == null ? 13 : 17;
+        if (tok != null && psm != 0) throw new IllegalArgumentException("a token or a PSM, not both");
+        int len = ip == null ? 7 : tok != null ? 17 : psm != 0 ? 15 : 13;
         byte[] b = new byte[len];
         b[0] = 'L';
         b[1] = 'u';
@@ -59,6 +71,10 @@ final class Card {
             b[11] = (byte) (port >> 8);
             b[12] = (byte) port;
             if (tok != null) System.arraycopy(tok, 0, b, 13, 4);
+            if (psm != 0) {
+                b[13] = (byte) (psm >> 8);
+                b[14] = (byte) psm;
+            }
         }
         return b;
     }
@@ -75,8 +91,14 @@ final class Card {
             host = (b[7] & 0xFF) + "." + (b[8] & 0xFF) + "." + (b[9] & 0xFF) + "." + (b[10] & 0xFF);
             port = (b[11] & 0xFF) << 8 | (b[12] & 0xFF);
         }
-        if (kind == RECEIVER && (host == null || port == 0 || host.equals("0.0.0.0"))) return null;
-        return new Card(kind, id, host, port, b.length >= 17 ? hex(b, 13, 4) : null);
+        int psm = b.length == 15 ? (b[13] & 0xFF) << 8 | (b[14] & 0xFF) : 0;
+        if (kind == RECEIVER && (host == null || port == 0 || host.equals("0.0.0.0"))) {
+            // Without an address a receiver's card is still good for its Bluetooth channel.
+            if (psm == 0) return null;
+            host = null;
+            port = 0;
+        }
+        return new Card(kind, id, host, port, b.length >= 17 ? hex(b, 13, 4) : null, psm);
     }
 
     /**

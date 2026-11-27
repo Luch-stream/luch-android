@@ -68,11 +68,14 @@ final class Compat {
         return name != null && name.matches("(tun|tap|ppp|wg|ipsec|rmnet|ccmni|clat).*");
     }
 
-    /** The first IPv4 address on a LAN interface (ConnectivityManager.getActiveNetwork is Android 6). */
+    /**
+     * The first IPv4 address on a LAN interface (ConnectivityManager.getActiveNetwork is Android 6). Not a Wi-Fi
+     * Direct group's (p2p-*): only the sender that joined it reaches that one.
+     */
     static String ipv4() {
         try {
             for (NetworkInterface i : Collections.list(NetworkInterface.getNetworkInterfaces())) {
-                if (!i.isUp() || i.isLoopback() || tunnel(i.getName())) continue;
+                if (!i.isUp() || i.isLoopback() || tunnel(i.getName()) || i.getName().startsWith("p2p")) continue;
                 for (InetAddress a : Collections.list(i.getInetAddresses())) {
                     if (a instanceof Inet4Address) return a.getHostAddress();
                 }

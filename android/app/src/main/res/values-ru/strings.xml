@@ -151,4 +151,5 @@
     <string name="touch_direct">Касание: прямое</string>
     <string name="touch_pad">Касание: тачпад</string>
     <string name="takeover_ask">%s хочет показать своё. Остановить то, что сейчас на экране, и пустить?</string>
+    <string name="direct_ask">%s хочет подключиться напрямую (Wi-Fi Direct). Свой Wi-Fi телевизор по возможности сохранит.</string>
 </resources>

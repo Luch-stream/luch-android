@@ -25,6 +25,15 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
+    <!-- "Direct" (PROTOCOL.md 4m), for a sender with no network to this TV: a Bluetooth LE channel for the request
+         (connect, Android 12+), then a Wi-Fi Direct group the sender joins. Wi-Fi Direct needs "Nearby Wi-Fi devices"
+         on Android 13+, and before it the location permission; never used to locate anyone. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="tiramisu" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="32" />
 
     <!-- The settings pages SleepService.openSettings looks for (Android 11+ hides them otherwise). -->
     <queries>
@@ -46,6 +55,13 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+    <!-- Implied by the Wi-Fi and location permissions of "direct"; a TV with Ethernet only, or no location, still
+         installs Luch. -->
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.location.network" android:required="false" />
 
     <application
         android:enableOnBackInvokedCallback="true"

@@ -62,10 +62,11 @@ sender   → {"t":"bye"}
 ### 1c. Bluetooth LE
 
 The receiver advertises its **card** (below) as manufacturer data, company id `0xFFFF` (the id the Bluetooth SIG
-keeps for tests and for projects without one; the card's `Lu` magic tells it apart). Non-connectable, no name, no
-pairing token: flags (3 bytes) + manufacturer data (4 + 13) = 20 of the 31 bytes of a legacy advertisement, so it
-works on every controller from Bluetooth 4.0. Once a second normally, ten times a second for 2 minutes after it
-heard a sender looking.
+keeps for tests and for projects without one; the card's `Lu` magic tells it apart). No name, no pairing token:
+flags (3 bytes) + manufacturer data (4 + 13) = 20 of the 31 bytes of a legacy advertisement, so it works on every
+controller from Bluetooth 4.0. Non-connectable, unless the card carries the PSM of the "direct" channel (4m): then
+4 + 15 = 22 bytes, and connectable. Once a second normally, ten times a second for 2 minutes after it heard a sender
+looking.
 
 The sender scans (BlueZ: `SetDiscoveryFilter` with `Transport=le`, `DuplicateData=true`; `StartDiscovery` for
 12 s) and connects to each card's address and port as in 1b. Receivers heard are listed nearest first (strongest
@@ -129,9 +130,13 @@ What a receiver says about itself where there is no room for JSON (1c, 1d), big-
 | 3..7 | the first 4 bytes of the id (its first 8 hex digits, dashes left out) |
 | 7..11 | IPv4 (receiver only) |
 | 11..13 | control port (receiver only) |
+| 13..15 | L2CAP PSM of the "direct" channel (Bluetooth only, 4m; 0 = none) |
 | 13..17 | pairing token (sound only) |
 
-A card of another version, kind or magic is ignored; a receiver's card without an address too.
+The length tells the last two apart: 15 bytes carry a PSM, 17 a token; a sender that reads only the first 13 bytes
+works as before. A card of another version, kind or magic is ignored; a receiver's card without an address too,
+unless it has a PSM: a receiver with no usable LAN address sends `0.0.0.0` and port 0 with its PSM. Test vector:
+id `0b6f1c2a-…`, IPv4 `0.0.0.0`, port 0, PSM `0x0080` → `4c 75 01 0b 6f 1c 2a 00 00 00 00 00 00 00 80`.
 
 ## 2. Networks with a VPN (must work without any setting)
 
@@ -681,6 +686,55 @@ receiver → {"t":"ble_wake","ok":true}     once it has been on the air for ms
   device lacks the Bluetooth permission (never asked for because of a network message: the status screen asks once).
   `no_ble`: no adapter, Bluetooth off, or the advertising failed. An older receiver answers `unknown` (section 3).
 
+## 4m. Direct: Bluetooth LE, then a Wi-Fi Direct group
+
+The last rung, for a sender and a TV with no network between them (a guest Wi-Fi that keeps clients apart, no common
+LAN): the request goes over Bluetooth LE, the receiver makes a Wi-Fi Direct group (a soft access point,
+`DIRECT-xy-…` with a WPA2 passphrase), and the sender joins it as an ordinary Wi-Fi network (macOS has no Wi-Fi
+Direct; Linux could, but a plain client is the same on both). Then everything is plain Luch over that network.
+
+1. **The card.** A receiver that can do it puts its L2CAP PSM in the card (1f) and advertises it connectable.
+2. **The channel.** The sender connects over LE to the advertiser and opens an L2CAP connection-oriented channel on
+   that PSM (Android `listenUsingInsecureL2capChannel`, API 29+; macOS `CBPeripheral.openL2CAPChannel`; BlueZ an
+   L2CAP LE socket). No Bluetooth pairing: the link is not trusted.
+3. **On it: the TLS control channel, byte for byte** (sections 3, 3a): TLS with both certificates, the pins, the
+   6-round code check, hello and welcome, JSON lines. The hello carries `"via":"ble"` and `"want":["direct"]`. An
+   unpaired sender pairs with the code on the TV, and that is the person's yes for its first request on that
+   connection; a paired one is asked on the TV every time: "Linux Laptop wants to connect directly (Wi-Fi Direct).
+   The TV keeps its own Wi-Fi if it can." Allow / Deny. Over this channel only `hello`, `ping`, `pong`, `bye`,
+   `error` and `direct` are taken; anything else is `not_allowed` (nothing is shown over Bluetooth). The receiver
+   knows the channel by itself (`via` is for logs): refusal limits count against the Bluetooth device, and a
+   receiver that bridges the channel to its own TLS port on loopback gives it no trust of loopback.
+4. **The request**, after the welcome:
+
+```
+sender   → {"t":"direct"}
+receiver → {"t":"direct","ssid":"DIRECT-xy-Luch-abcd","pass":"<8..63 chars>","freq":<MHz or 0>,
+            "addr":"192.168.49.1","port":<plain control port>,"tls_port":<TLS port>}     once the group is up
+           or {"t":"error","for":"direct","code":"denied"|"no_p2p"|"not_allowed"|"busy"|"timeout","detail":"..."}
+```
+
+   `denied`: Deny or Back on the TV, or the same sender (key or Bluetooth device) was denied in the last 10 minutes.
+   `no_p2p`: no Wi-Fi Direct, Android before 10, Wi-Fi off, the group could not be made, or the permission is missing
+   (the detail says which). `not_allowed`: not over TLS. `busy`: the TV is asking about another sender's request, or
+   Wi-Fi Direct is busy with something else. `timeout`: nobody answered in 60 s, or the group did not come up in 20 s.
+   The welcome lists `"direct"` in `modes` only when the receiver can make a group; a request also works over TLS on
+   the LAN. An older receiver answers `unknown` (section 3).
+5. **The group.** Made on demand with a fresh random name (`DIRECT-xy-Luch-abcd`) and passphrase (16 letters and
+   digits) on 5 GHz when the chip can, else on any band; if the system takes no name of ours it makes its own and
+   that is handed out as it is. One at a time: a request while one is up gets the same group, after its own Allow. It
+   stays while any connection to the receiver over it is open, and 2 minutes after the last one ends (or after it was
+   handed out, if nobody came); then it is removed. The TV keeps its own Wi-Fi where the chip can do both.
+6. **Then.** The sender keeps the Bluetooth channel only until it has joined; it connects to `addr:tls_port` with
+   the same pin, as to any receiver, and everything (mirror, cast, groups, input) is as usual. Afterwards the sender
+   goes back to the Wi-Fi it was on. Senders offer it as the last rung of the find ladder, and only after asking:
+   it takes the computer off its Wi-Fi.
+
+Android: the L2CAP server needs Android 10 and, on 12+, "Nearby devices" (`BLUETOOTH_CONNECT`); the group needs
+"Nearby Wi-Fi devices" (`NEARBY_WIFI_DEVICES`, `neverForLocation`) on 13+, and the location permission on 10–12.
+They are asked for once on the status screen, never because of a request. The group's own address is never put in
+the card or used for discovery.
+
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 
 `welcome` also carries:
@@ -801,6 +855,13 @@ an IDR comes only at the start and after a loss; a real TV's numbers are the one
 here the LAN is the place the stream must be safe in, and per-frame sealing makes it cheap. Media is taken only
 from the control connection's address (a stranger's packets are dropped before any work), and a forged frame
 costs one lost frame at most.
+
+**Direct (4m).** Bluetooth only carries the same TLS channel, so pairing, pins and the code check are what keep a
+stranger out, not the radio: the L2CAP link is unpaired and trusted for nothing, and the receiver counts refusals
+against the Bluetooth device as it does against an address. The group's passphrase is fresh for each group and
+goes only over that TLS channel to a sender let in; even a paired sender's request is allowed on the TV each time,
+as it changes the TV's radio; the group goes 2 minutes after its last connection. Whoever joins the group still
+meets the TLS port, so the passphrase alone gets nobody onto the screen.
 
 **What is not covered yet.** Files, covers and relayed media that a receiver fetches from a sender (sections 4a,
 4b, 4d, 4g) are plain HTTP on the LAN, protected by a random token in the path and by being served only to the

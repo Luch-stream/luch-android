@@ -28,9 +28,10 @@ import android.util.Log;
 import java.util.Collections;
 
 /**
- * Being found where mDNS does not get through (PROTOCOL.md 1c, 1d): this TV's card over Bluetooth LE, a sender
- * "looking for Luch" heard the same way, the card said by sound when the person asks for it, and another TV's
- * remote sent for a sender that cannot advertise (4l).
+ * Being found where mDNS does not get through (PROTOCOL.md 1c, 1d): this TV's card over Bluetooth LE (with the PSM
+ * of {@link BleLink}'s channel when "direct" works here, 4m), a sender "looking for Luch" heard the same way, the
+ * card said by sound when the person asks for it, and another TV's remote sent for a sender that cannot advertise
+ * (4l).
  *
  * Bluetooth is a bonus, never a condition: no adapter, Bluetooth off, no permission or no advertising support
  * (many TVs before Android 8) all leave {@link #state} saying so and everything else as it was.
@@ -93,6 +94,7 @@ final class Nearby {
             MAIN.removeCallbacks(REFRESH);
             stopAdvertising();
             stopListening();
+            BleLink.stop();
             state = STOPPED;
         });
     }
@@ -120,12 +122,20 @@ final class Nearby {
         return m == null ? null : m.getAdapter();
     }
 
-    /** This TV's card as advertised: no pairing token over the air. Null without an IPv4 address. */
+    /**
+     * This TV's card as advertised: no pairing token over the air, the PSM of the "direct" channel when it listens
+     * (4m). Null with neither an IPv4 address nor a PSM.
+     */
     static byte[] card(Context c) {
         String ip = Compat.ipv4();
         int port = LuchService.listening > 0 ? LuchService.listening : Luch.PORT;
-        if (Card.ipv4(ip) == null) return null;
-        return new Card(Card.RECEIVER, Luch.id(c), ip, port, null).encode();
+        int psm = BleLink.psm;
+        if (Card.ipv4(ip) == null) {
+            if (psm == 0) return null;
+            ip = null;
+            port = 0;
+        }
+        return new Card(Card.RECEIVER, Luch.id(c), ip, port, null, psm).encode();
     }
 
     /** Puts the current card on the air again when the address changed, Bluetooth came on, or a sender looked. */
@@ -133,6 +143,8 @@ final class Nearby {
         if (app == null || quiet) return;
         boolean wantEager = System.currentTimeMillis() - lookingAt < EAGER_MS;
         String why = unavailable(app);
+        // The channel for "direct" first: its PSM goes in the card.
+        BleLink.want(app, why == null ? adapter(app) : null, why == null && DirectGroup.unavailable(app) == null);
         byte[] c = why == null ? card(app) : null;
         if (why == null && c == null) why = NO_ADDRESS;
         if (why != null) {
@@ -150,6 +162,8 @@ final class Nearby {
 
     @SuppressLint("MissingPermission") // unavailable() checked BLUETOOTH_ADVERTISE on Android 12+
     private static void advertise(byte[] c, boolean fast) {
+        // A PSM in the card: a sender connects to open the channel of "direct" (4m).
+        boolean connectable = BleLink.psm != 0;
         BluetoothAdapter a = adapter(app);
         advertiser = a == null ? null : a.getBluetoothLeAdvertiser();
         if (advertiser == null) {
@@ -159,10 +173,11 @@ final class Nearby {
         AdvertiseSettings settings = new AdvertiseSettings.Builder()
                 .setAdvertiseMode(fast ? AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY : AdvertiseSettings.ADVERTISE_MODE_LOW_POWER)
                 .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
-                .setConnectable(false)
+                .setConnectable(connectable)
                 .setTimeout(0)
                 .build();
-        // Flags (3 bytes) and the card as manufacturer data (4 + 13): 20 of the 31 bytes; no name, it would not fit.
+        // Flags (3 bytes) and the card as manufacturer data (4 + 13, or 4 + 15 with a PSM): 20 or 22 of the 31 bytes;
+        // no name, it would not fit.
         AdvertiseData data = new AdvertiseData.Builder()
                 .setIncludeDeviceName(false)
                 .setIncludeTxPowerLevel(false)
@@ -172,7 +187,8 @@ final class Nearby {
             @Override
             public void onStartSuccess(AdvertiseSettings s) {
                 state = ADVERTISING;
-                Log.i(LuchService.TAG, "advertising over Bluetooth" + (fast ? ", fast" : ""));
+                Log.i(LuchService.TAG, "advertising over Bluetooth" + (fast ? ", fast" : "")
+                        + (connectable ? ", connectable" : ""));
             }
 
             @Override

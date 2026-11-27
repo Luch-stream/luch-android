@@ -153,4 +153,5 @@
     <string name="touch_direct">Touch: direct</string>
     <string name="touch_pad">Touch: touchpad</string>
     <string name="takeover_ask">%s wants to show something else. Stop what is on the screen and let it?</string>
+    <string name="direct_ask">%s wants to connect directly (Wi-Fi Direct). The TV keeps its own Wi-Fi if it can.</string>
 </resources>

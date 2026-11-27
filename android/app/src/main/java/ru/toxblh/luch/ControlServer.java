@@ -39,6 +39,8 @@ final class ControlServer {
     static final long ASK_MS = 60_000, CODE_MS = 120_000;
     /** What anyone may send before being let in. */
     private static final java.util.List<String> FREE = java.util.Arrays.asList("hello", "ping", "pong", "bye", "error");
+    /** Who is asked about a "direct" request on the TV (PROTOCOL.md 4m). */
+    private static final Direct.Asks DIRECT_ASKS = new Direct.Asks(System::currentTimeMillis);
 
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -169,7 +171,14 @@ final class ControlServer {
         String peerName = null;
         String peerApp = "";
         boolean peerInput = false;
-        String address = s.getInetAddress().getHostAddress();
+        // Over Bluetooth (BleLink's bridge on loopback): the device, not 127.0.0.1, is who this is and what counts.
+        String ble = secure ? BleLink.via(s) : null;
+        String address = ble != null ? ble : s.getInetAddress().getHostAddress();
+        // Over a Wi-Fi Direct group of ours: it stays while this connection is open.
+        Direct.Lifetime overGroup = DirectGroup.arrived(s.getLocalAddress());
+        // This connection paired just now: its code on the TV was the person's yes to a "direct" request too.
+        boolean freshPair = false;
+        java.util.concurrent.atomic.AtomicReference<DirectAsk> askingDirect = new java.util.concurrent.atomic.AtomicReference<>();
         MirrorSession.Control control = null;
         // Let in: paired (TLS), or allowed on the TV for this connection (plain). Set from the prompt's thread.
         java.util.concurrent.atomic.AtomicBoolean allowed = new java.util.concurrent.atomic.AtomicBoolean();
@@ -179,7 +188,8 @@ final class ControlServer {
             s.setTcpNoDelay(true);
             byte[] fp = null;
             if (secure) {
-                s.setSoTimeout(5_000);   // a client that never finishes the handshake does not keep a thread
+                // A client that never finishes the handshake does not keep a thread; Bluetooth is slower.
+                s.setSoTimeout(ble != null ? 20_000 : 5_000);
                 javax.net.ssl.SSLSocket tls = (javax.net.ssl.SSLSocket) s;
                 tls.startHandshake();
                 try {
@@ -226,6 +236,12 @@ final class ControlServer {
                             .put("detail", "allow it on the TV first"));
                     continue;
                 }
+                if (ble != null && !FREE.contains(t) && !Direct.MODE.equals(t)) {
+                    // Over Bluetooth only the way to the network: nothing to show, no addresses to send media to.
+                    send(out, new JSONObject().put("t", "error").put("code", "not_allowed").put("for", t)
+                            .put("detail", "over Bluetooth only direct; join the network first"));
+                    continue;
+                }
                 switch (t) {
                     case "hello": {
                         if (peerId != null) break;   // one hello per connection
@@ -245,7 +261,9 @@ final class ControlServer {
                         peerName = msg.optString("name", address);
                         peerApp = msg.optString("app");
                         peerInput = wants(msg, "input");
+                        boolean known = secure && gate(context).isPaired(Pairing.hex(fp));
                         if (secure && !admit(s, in, out, fp, peerId, peerName, address)) return;
+                        freshPair = secure && !known;
                         JSONObject w = welcome(secure);
                         if (token != null) w.put("token", token);
                         send(out, w);
@@ -258,7 +276,10 @@ final class ControlServer {
                             Luch.connected(peer);
                             say(context.getString(R.string.toast_connected, peer.name));
                         };
-                        if (secure) {
+                        if (ble != null) {
+                            // Only here to ask for "direct": not listed as connected, no bench, no reports.
+                            allowed.set(true);
+                        } else if (secure) {
                             letIn.run();
                             // Crash reports only to a paired sender: they say what this TV is and runs.
                             if (wants(msg, "reports")) {
@@ -463,6 +484,34 @@ final class ControlServer {
                         });
                         break;
                     }
+                    case Direct.MODE: {
+                        if (!secure) {
+                            send(out, Direct.error("not_allowed", "only a paired sender, over TLS"));
+                            break;
+                        }
+                        String why = DirectGroup.unavailable(context);
+                        if (why != null) {
+                            send(out, Direct.error("no_p2p", why));
+                            break;
+                        }
+                        Log.i(LuchService.TAG, "direct asked by " + peerName + (ble != null ? " over Bluetooth" : ""));
+                        if (freshPair) {
+                            freshPair = false;
+                            handOutGroup(control);
+                            break;
+                        }
+                        String fpHex = Pairing.hex(fp);
+                        String no = DIRECT_ASKS.take(fpHex, address);
+                        if (no != null) {
+                            send(out, Direct.error(no, "busy".equals(no) ? "the TV is asking about another one"
+                                    : "refused on the TV a moment ago"));
+                            break;
+                        }
+                        DirectAsk ask = new DirectAsk(control, fpHex, address, askingDirect);
+                        askingDirect.set(ask);
+                        ask.show(peerName);
+                        break;
+                    }
                     case "bye":
                         return;
                     default:
@@ -478,6 +527,9 @@ final class ControlServer {
                 left.dismiss();   // the sender left while the TV was asking about it
                 gate(context).promptEnded();
             }
+            DirectAsk unanswered = askingDirect.getAndSet(null);
+            if (unanswered != null) unanswered.end(false, null);   // the sender left while the TV was asking
+            if (overGroup != null) overGroup.left();
             open.remove(s);
             closeQuietly(s);
             if (control != null) {
@@ -488,7 +540,7 @@ final class ControlServer {
                 DocActivity.closeFrom(control);
                 MirrorActivity.setLatencyLab(control, false);
             }
-            if (peerId != null && allowed.get()) Luch.disconnected(peerId);
+            if (peerId != null && allowed.get() && ble == null) Luch.disconnected(peerId);
         }
     }
 
@@ -730,6 +782,69 @@ final class ControlServer {
         main.postDelayed(timeout, ASK_MS);
     }
 
+    // ---- "direct": a Wi-Fi Direct group for a sender with no network to this TV (PROTOCOL.md 4m) ----
+
+    /** The group, or why not, to {@code reply}; the answer comes once the group is up. */
+    private void handOutGroup(MirrorSession.Control reply) {
+        DirectGroup.get(context, (g, code, detail) -> reply.send(g != null
+                ? Direct.answer(g, LuchService.listening, tlsPort) : Direct.error(code, detail)));
+    }
+
+    /** One "direct" request asked about on the TV: Allow, Deny, Back or no answer in ASK_MS, answered once. */
+    private final class DirectAsk implements PairPrompt.Answer, Runnable {
+        private final MirrorSession.Control reply;
+        private final String fp, address;
+        private final java.util.concurrent.atomic.AtomicReference<DirectAsk> holder;
+        private final java.util.concurrent.atomic.AtomicBoolean ended = new java.util.concurrent.atomic.AtomicBoolean();
+        private volatile PairPrompt prompt;
+
+        DirectAsk(MirrorSession.Control reply, String fp, String address,
+                java.util.concurrent.atomic.AtomicReference<DirectAsk> holder) {
+            this.reply = reply;
+            this.fp = fp;
+            this.address = address;
+            this.holder = holder;
+        }
+
+        void show(String name) {
+            prompt = PairPrompt.ask(context, name, context.getString(R.string.direct_ask, name), this);
+            main.postDelayed(this, ASK_MS);
+        }
+
+        @Override
+        public void allow() {
+            if (end(false, null)) handOutGroup(reply);
+        }
+
+        @Override
+        public void deny() {
+            end(true, "refused on the TV");
+        }
+
+        @Override
+        public void close() {
+            end(false, "closed on the TV");
+        }
+
+        /** Nobody answered. */
+        @Override
+        public void run() {
+            if (end(false, null)) reply.send(Direct.error("timeout", "nobody answered on the TV"));
+        }
+
+        /** Takes the card down; {@code denied} non-null is told to the sender. False when it had ended already. */
+        boolean end(boolean deny, String denied) {
+            if (!ended.compareAndSet(false, true)) return false;
+            main.removeCallbacks(this);
+            holder.compareAndSet(this, null);
+            PairPrompt p = prompt;
+            if (p != null) p.dismiss();
+            DIRECT_ASKS.answered(fp, address, deny);
+            if (denied != null) reply.send(Direct.error("denied", denied));
+            return true;
+        }
+    }
+
     /** The volume, after a change from a sender or from the remote, to every connected sender. */
     static void broadcastVolume(JSONObject v) {
         try {
@@ -781,8 +896,9 @@ final class ControlServer {
                 .put("model", Luch.model())
                 .put("decoders", new JSONArray(Luch.decoders()))
                 .put("max", Luch.maxSize())
-                .put("modes", BleWake.withMode(new JSONArray().put("mirror").put("photo").put("media").put("audio")
-                        .put("doc").put("ink").put("latency"), Nearby.unavailable(context)))
+                .put("modes", Direct.withMode(BleWake.withMode(new JSONArray().put("mirror").put("photo").put("media")
+                        .put("audio").put("doc").put("ink").put("latency"), Nearby.unavailable(context)),
+                        DirectGroup.unavailable(context)))
                 // The TV's own apps it can open with a link (PROTOCOL.md, section 4f).
                 .put("apps", Remote.apps(context))
                 // What "media" plays here (PROTOCOL.md, section 4b).

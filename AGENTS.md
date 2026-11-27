@@ -20,6 +20,9 @@ sides together.
     keyboards with letters, mice, devices with sticks and the touch screen go to the sender.
   - `Nearby`: Bluetooth LE (the card, PROTOCOL.md 1c, and another TV's wake for a sender, 4l); `BleWake`: the
     wake request's checks, plain Java with a JVM test.
+  - "Direct" (PROTOCOL.md 4m): `BleLink` (the L2CAP server whose PSM is in the card, each channel bridged to the TLS
+    port and known there as its Bluetooth device), `DirectGroup` (the Wi-Fi Direct group), `Direct` (the answers,
+    names and passphrases, the group's lifetime, who is asked; plain Java with a JVM test).
   - `LowLatencyDecoder`: decoder setup; `Bench` and `Caps`: what the TV can do, sent in the welcome.
   - `LatencyOverlay`, `LatencyPattern`: the latency lab's pattern over the mirror screen (PROTOCOL.md, section 4j);
     the layout and the QR code must stay the same as luch-linux's `luch-latency/src/pattern.rs` (`LatencyPatternTest`).

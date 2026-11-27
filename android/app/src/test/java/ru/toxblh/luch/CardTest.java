@@ -35,6 +35,40 @@ public class CardTest {
         assertNull(Card.decode(c.encode()).token);
     }
 
+    /** The vector all three sides test (luch-linux, the Mac sender): a receiver with no address, only its channel. */
+    @Test
+    public void aCardWithAPsm() {
+        Card c = new Card(Card.RECEIVER, "0b6f1c2a-0000-4000-8000-000000000000", null, 0, null, 0x0080);
+        assertEquals("4c 75 01 0b 6f 1c 2a 00 00 00 00 00 00 00 80".replace(" ", ""), hex(c.encode()));
+        // Flags (3) + manufacturer data (1 length, 1 type, 2 company, 15 card) = 22 of the 31 bytes.
+        assertEquals(15, c.encode().length);
+        Card back = Card.decode(c.encode());
+        assertEquals(0x0080, back.psm);
+        assertEquals("0b6f1c2a", back.id);
+        assertNull(back.host);
+        assertEquals(0, back.port);
+        assertNull(back.token);
+        // With an address the address stays; a sender reading only 13 bytes sees the card it always did.
+        Card both = new Card(Card.RECEIVER, "3f0c2a8e", "192.168.1.20", 47800, null, 0x1001);
+        assertEquals("4c75013f0c2a8ec0a80114bab81001", hex(both.encode()));
+        Card first13 = Card.decode(java.util.Arrays.copyOf(both.encode(), 13));
+        assertEquals("192.168.1.20", first13.host);
+        assertEquals(0, first13.psm);
+        assertEquals(0x1001, Card.decode(both.encode()).psm);
+        assertEquals(47800, Card.decode(both.encode()).port);
+    }
+
+    @Test
+    public void aPsmIsNotAToken() {
+        // 17 bytes are the sound's card: bytes 13..15 there are the token's, not a PSM.
+        Card sound = Card.decode(new Card(Card.RECEIVER, "3f0c2a8e", "192.168.1.20", 47800, "0badf00d").encode());
+        assertEquals(0, sound.psm);
+        assertEquals("0badf00d", sound.token);
+        // Without an address and without a PSM a receiver's card is still nothing.
+        assertNull(Card.decode(new byte[] {0x4c, 0x75, 0x01, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0}));
+        assertNull(Card.decode(new byte[] {0x4c, 0x75, 0x01, 1, 2, 3, 4, 0, 0, 0, 0, 0, 0}));
+    }
+
     @Test
     public void aSenderLooking() {
         Card s = Card.decode(new byte[] {0x4c, 0x75, 0x02, (byte) 0x9a, 0x1b, 0x2c, 0x3d});

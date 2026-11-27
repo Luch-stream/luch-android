@@ -103,6 +103,7 @@ public class LuchService extends Service {
         if (server != null) server.stop();
         if (standby != null) unregisterReceiver(standby);
         Nearby.stop();
+        DirectGroup.stop();
         DeviceState.detach(this);
         super.onDestroy();
     }
