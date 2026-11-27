@@ -132,8 +132,10 @@ public class NowPlayingActivity extends Activity {
         String a = n == null ? "" : n.optString("art");
         if (!a.equals(shownArt)) {
             shownArt = a;
-            art.setImageBitmap(null);
-            if (!a.isEmpty()) loadArt(a);
+            // The old cover stays until the new one is in: a sender that gives the same cover a new link must not
+            // make it blink.
+            if (a.isEmpty()) art.setImageBitmap(null);
+            else loadArt(a);
         }
         progress();
         wake();

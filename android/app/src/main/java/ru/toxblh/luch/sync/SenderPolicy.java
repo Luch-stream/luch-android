@@ -6,7 +6,7 @@ package ru.toxblh.luch.sync;
  * luchd has the same policy in Rust (luchd/src/sync.rs) and both are tested with the same vectors.
  *
  * <p>Watching: one D for picture and sound, the slowest receiver's need plus 2 ms, at least the floor (150 ms). It
- * rises at once; it falls by at most 1 ms a second, and only after 30 s with every need 10 ms below it, so that one
+ * rises at once, 10 ms above the need; it falls in one step, and only after 30 s with every need 10 ms below it, so that one
  * slow second does not move every device back and forth.
  *
  * <p>Interactive: the picture is shown as soon as possible (D_v = 0) and the sound waits for it: D_a is the later of
@@ -16,6 +16,9 @@ package ru.toxblh.luch.sync;
  */
 public final class SenderPolicy {
     public enum Mode { INTERACTIVE, WATCHING }
+
+    /** Watching: D is set this far above the slowest need, so that its small changes leave D where it is. */
+    static final double HEADROOM_MS = 10;
 
     private final Mode mode;
     private final double toleranceMs, floorMs;
@@ -39,13 +42,14 @@ public final class SenderPolicy {
         double ta;   // the target before smoothing
         if (mode == Mode.WATCHING) {
             ta = Double.isNaN(need) ? floorMs : Math.max(floorMs, need + 2);
-            double d = smooth(nowS, da, ta, 1, 30, 10);
+            double set = Double.isNaN(need) ? floorMs : Math.max(floorMs, need + HEADROOM_MS);
+            double d = step(nowS, da, ta, set, 0, 30, 10);
             dv = da = d;
         } else {
             if (Double.isNaN(need)) need = 0;
             if (Double.isNaN(video)) video = 0;
             ta = Math.max(need, video);
-            double d = smooth(nowS, da, ta, 1, 10, 5);
+            double d = step(nowS, da, ta, ta, 1, 10, 5);
             // The picture waits only when the sound would trail it by more than the tolerance, and then for the excess.
             dv = d > video + toleranceMs ? d - toleranceMs : 0;
             da = d;
@@ -54,15 +58,23 @@ public final class SenderPolicy {
         return new double[]{round(dv), round(da)};
     }
 
-    /** Rises to the target at once (beyond {@code riseMs}); falls by 1 ms a second after {@code waitS} well below. */
-    private double smooth(double now, double d, double target, double riseMs, double waitS, double belowMs) {
-        if (first || target > d + riseMs || (target > d && d == 0)) {
+    /**
+     * D moves seldom and in one step, since every change is a resync heard on every device at once (AudioPlayout):
+     * up to {@code set} as soon as {@code least} is beyond it (by more than {@code riseMs}); down to {@code set} once it
+     * has been more than {@code belowMs} under D for {@code waitS}. Falling by 1 ms a second instead was a resync every
+     * few seconds for minutes, the receivers' 0.1 % slew being no faster.
+     */
+    private double step(double now, double d, double least, double set, double riseMs, double waitS, double belowMs) {
+        if (first || least > d + riseMs || (least > d && d == 0)) {
             lowSince = Double.NaN;
-            return target;
+            return set;
         }
-        if (target < d - belowMs) {
+        if (set < d - belowMs) {
             if (Double.isNaN(lowSince)) lowSince = now;
-            if (now - lowSince >= waitS) return Math.max(target, d - 1);
+            if (now - lowSince >= waitS) {
+                lowSince = Double.NaN;
+                return set;
+            }
         } else {
             lowSince = Double.NaN;
         }

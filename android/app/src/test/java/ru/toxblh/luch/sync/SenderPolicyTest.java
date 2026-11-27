@@ -14,26 +14,26 @@ public class SenderPolicyTest {
 
     /** {now s, video pts ms, need ms, expected D_v, expected D_a}. */
     static final double[][] WATCHING = {
-            {0, N, N, 150, 150},          // nothing reported yet: the floor
-            {1, 40, 120, 150, 150},       // needs under the floor
-            {2, 40, 210, 212, 212},       // a slow receiver: up at once
-            {3, 40, 230.5, 232.5, 232.5},
-            {4, 40, 200, 232.5, 232.5},   // 10 ms below for less than 30 s: stays
-            {33, 40, 200, 232.5, 232.5},
-            {34, 40, 200, 231.5, 231.5},  // 30 s below: down by 1 ms a second
-            {35, 40, 200, 230.5, 230.5},
-            {36, 40, 229, 230.5, 230.5},  // within 10 ms again: holds
-            {37, 40, 240, 242, 242},
+            {0, N, N, 150, 150},
+            {1, 40, 120, 150, 150},
+            {2, 40, 210, 220, 220},
+            {3, 40, 230.5, 240.5, 240.5},
+            {4, 40, 200, 240.5, 240.5},
+            {33, 40, 200, 240.5, 240.5},
+            {34, 40, 200, 210, 210},
+            {35, 40, 200, 210, 210},
+            {36, 40, 229, 239, 239},
+            {37, 40, 240, 250, 250},
     };
 
     static final double[][] INTERACTIVE = {
-            {0, 30, 15, 0, 30},           // the speaker is faster than the picture: it waits for the picture
-            {1, 31, 15, 0, 30},           // 1 ms later: not a rise beyond 1 ms, held
+            {0, 30, 15, 0, 30},
+            {1, 31, 15, 0, 30},
             {2, 33, 15, 0, 33},
-            {3, 25, 15, 0, 33},           // the picture got faster: 10 s before it follows
-            {13, 25, 15, 0, 32},
-            {14, 25, 70, 50, 70},         // a Bluetooth speaker: the picture waits only for the excess over 20 ms
-            {15, 25, 40, 50, 70},         // and does not jump back at once
+            {3, 25, 15, 0, 33},
+            {13, 25, 15, 0, 25},
+            {14, 25, 70, 50, 70},
+            {15, 25, 40, 50, 70},
     };
 
     private static void run(SenderPolicy p, double[][] rows) {
