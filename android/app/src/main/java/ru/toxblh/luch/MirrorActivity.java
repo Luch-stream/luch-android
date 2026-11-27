@@ -39,6 +39,9 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     private WifiManager.WifiLock wifiLock;
     private TextView stats;
     private boolean statsOn;
+    /** The latency lab (PROTOCOL.md 4j), on for the sender that asked until it says off or goes. */
+    private static volatile MirrorSession.Control latencyLab;
+    private LatencyOverlay latencyOverlay;
     private SurfaceView video;
     private FrameLayout rootView;
     /** The presenter's pointer and ink over the mirrored screen (PROTOCOL.md 4h): the video's bounds are the picture. */
@@ -125,6 +128,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             rootView.setOnCapturedPointerListener((v, e) -> captured(e));
         }
         stats.setVisibility(statsOn ? View.VISIBLE : View.GONE);
+        showLatencyLab();
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         shown = this;
@@ -403,6 +407,36 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
         lp.preferredRefreshRate = fastest;
         lp.preferredDisplayModeId = fastestMode;
         getWindow().setAttributes(lp);
+    }
+
+    /**
+     * The latency lab from a sender: on, this screen draws the receiver's pattern in its bottom right corner; off (or
+     * when that sender goes), it goes. Kept while no mirror screen is up, so the lab may start before the mirroring.
+     */
+    static void setLatencyLab(MirrorSession.Control from, boolean on) {
+        if (on) latencyLab = from;
+        else if (latencyLab == from) latencyLab = null;
+        else return;
+        MirrorActivity a = shown;
+        if (a != null) a.runOnUiThread(a::showLatencyLab);
+    }
+
+    static boolean latencyLabOn() {
+        return latencyLab != null;
+    }
+
+    private void showLatencyLab() {
+        boolean on = latencyLab != null;
+        if (on && latencyOverlay == null) {
+            latencyOverlay = new LatencyOverlay(this);
+            rootView.addView(latencyOverlay, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT));
+        } else if (!on && latencyOverlay != null) {
+            rootView.removeView(latencyOverlay);
+            latencyOverlay = null;
+        }
+        // The statistics sit where the computer's pattern comes out, top left: out of the camera's way meanwhile.
+        stats.setVisibility(statsOn && !on ? View.VISIBLE : View.GONE);
     }
 
     /** Turns the always-on heat warning on or off; the debug overlay is a separate thing. */
@@ -974,7 +1008,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
 
     private void toggleStats() {
         statsOn = !statsOn;
-        stats.setVisibility(statsOn ? View.VISIBLE : View.GONE);
+        stats.setVisibility(statsOn && latencyLab == null ? View.VISIBLE : View.GONE);
         prefs().edit().putBoolean("stats", statsOn).apply();
     }
 

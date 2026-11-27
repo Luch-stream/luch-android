@@ -537,6 +537,55 @@ sends relative motion, so only the sender's cursor (in the picture) is seen; bef
 Not covered (yet): a phone as the controller of a TV session (the reverse direction), input from the web receiver,
 and an Android sender obeying input (it would need an accessibility service).
 
+## 4j. Latency lab
+
+To measure photon-to-photon latency a person films the computer's screen and the TV in one shot with a phone at
+240 fps (luch-linux, `docs/latency-lab.md`). The computer shows a pattern that counts its refreshes; the TV shows it
+mirrored and draws a pattern of its own over the picture, so the camera also sees the TV's own refresh.
+
+```
+sender   → {"t":"latency","on":true}           the receiver draws its pattern over the mirror screen
+sender   → {"t":"latency","on":false}          and takes it away
+```
+
+- The receiver lists `"latency"` in `modes` (welcome). The flag holds for the sender that sent it, also when it comes
+  before `start` or between sessions, until `"on":false` or that sender's control connection closes. No answer.
+- While it is on, the receiver hides anything it draws in the top left corner (the statistics): the computer's
+  pattern comes out there.
+
+**Pattern.** In units of the QR code's side `S`, the QR code's top-left corner at (0,0), y down; the reference is
+`luch-latency/src/pattern.rs` in luch-linux.
+
+| Part | Where |
+|---|---|
+| White box | x −0.15 … 1.55, y −0.15 … 2.2 |
+| QR code (without its quiet zone; the box gives it one) | 0 … 1 both ways |
+| Cells 0–6 | row y 1.15 … 1.55, cell `i` at x 0.2·i … 0.2·(i+1) |
+| Cells 7–13 | row y 1.65 … 2.05, cell `i` at x 0.2·(i−7) … 0.2·(i−6) |
+
+Cell 0 is always white, cell 1 always black; cells 2–13 are the bits of the Gray code `g = c ^ (c >> 1)` of the
+12-bit counter `c`, highest first, black for 1. The counter goes up by one per refresh of that screen, and by more
+when a refresh was missed (it is a clock: `round(Δt / period)`), modulo 4096. A big decimal counter for people may be
+drawn outside the box.
+
+The QR code is byte mode, error correction L, the smallest version that holds the text, mask 0; its text is
+`LUCH1;R;key=value;...` (values without `;`, empty ones left out):
+
+| Key | Receiver |
+|---|---|
+| `v` | app version |
+| `mo` | manufacturer and model |
+| `a` | Android version |
+| `d` | video decoder in use |
+| `dm` | display mode, `WxH@Hz` |
+| `hz` | refresh as measured by the receiver's frame callbacks |
+| `s` | the picture surface, `WxH@HzHz` |
+| `g` | `1` when the low-latency display mode was asked for |
+
+The receiver draws its pattern with `S` = 0.3 of the screen height, the box 0.03 of the height from the right and
+bottom edges. The sender's page (`LUCH1;S;...`) puts its own at the left with `S` = 0.38, so on a 16:9 TV the two
+never overlap, whatever the computer's screen shape.
+
 ## 5. What the receiver can do (`hw`, `bench` in welcome)
 
 `welcome` also carries:
