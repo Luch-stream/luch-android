@@ -34,6 +34,58 @@ final class TestSender {
     private final LinkedBlockingQueue<JSONObject> in = new LinkedBlockingQueue<>();
     private int seq;
 
+    /**
+     * The sender's pts clock (µs): this device's monotonic clock 7 s ahead, so that a receiver which did not map it
+     * through its clock estimate would be 7 s off.
+     */
+    static long senderUs() {
+        return System.nanoTime() / 1000 + 7_000_000;
+    }
+
+    /** The playout delay D written into every packet (0.1 ms; 0 = as soon as possible, what an older sender sends). */
+    volatile int delayUnits;
+    /** Clock requests seen and answered (kind 3), over both media sockets. */
+    final java.util.concurrent.atomic.AtomicInteger clockRequests = new java.util.concurrent.atomic.AtomicInteger();
+    /** Whether kind 3 requests are answered: an older sender does not. */
+    volatile boolean answerClock = true;
+    private DatagramSocket videoUdp, audioUdp;
+
+    /** The media sockets: one per kind, kept for the session so that the receiver's clock requests come back to them. */
+    private synchronized DatagramSocket udp(boolean audio) throws IOException {
+        DatagramSocket s = audio ? audioUdp : videoUdp;
+        if (s != null) return s;
+        DatagramSocket made = new DatagramSocket();
+        if (audio) audioUdp = made;
+        else videoUdp = made;
+        Thread t = new Thread(() -> answer(made), "test-sender-clock");
+        t.setDaemon(true);
+        t.start();
+        return made;
+    }
+
+    /** Answers kind 3 requests on {@code s} as PROTOCOL.md 4h says: t1 back, with t2 and t3 on the pts clock. */
+    private void answer(DatagramSocket s) {
+        byte[] b = new byte[64];
+        DatagramPacket p = new DatagramPacket(b, b.length);
+        try {
+            while (!s.isClosed()) {
+                s.receive(p);
+                long t2 = senderUs();
+                if (p.getLength() < 32 || b[0] != 3 || (b[1] & 16) != 0) continue;
+                clockRequests.incrementAndGet();
+                if (!answerClock) continue;
+                ByteBuffer r = ByteBuffer.allocate(48);
+                r.put(b, 0, 24).putLong(ByteBuffer.wrap(b, 24, 8).getLong());
+                r.put(1, (byte) 16).putInt(16, 24);
+                r.position(32);
+                r.putLong(t2).putLong(senderUs());
+                s.send(new DatagramPacket(r.array(), 48, p.getAddress(), p.getPort()));
+            }
+        } catch (IOException ignored) {
+            // closed
+        }
+    }
+
     private TestSender(Socket socket) throws IOException {
         this.socket = socket;
         this.out = socket.getOutputStream();
@@ -120,12 +172,16 @@ final class TestSender {
         return startCodec(codec, audio);
     }
 
+    /** A start's "group" (PROTOCOL.md 4h), null for none: what an older sender sends. */
+    JSONObject group;
+
     JSONObject startCodec(String mime, JSONObject audio) throws Exception {
         codec = mime;
         JSONObject start = new JSONObject().put("t", "start").put("mode", "mirror")
                 .put("video", new JSONObject().put("codec", codec).put("width", 1920).put("height", 1080)
                         .put("fps", 30));
         if (audio != null) start.put("audio", audio);
+        if (group != null) start.put("group", group);
         send(start);
         JSONObject ready = next(5_000);
         assertEquals("ready: " + ready, "ready", ready.getString("t"));
@@ -140,10 +196,9 @@ final class TestSender {
         byte[] h = head.array();
         ByteBuffer b = ByteBuffer.allocate(MirrorSession.HEADER + h.length);
         b.put((byte) 2).put((byte) 2).putShort((short) 0).putShort((short) 1).putShort((short) 0)
-                .putInt(0).putInt(0).putInt(h.length).putShort((short) 0).putShort((short) 0).put(h);
-        try (DatagramSocket udp = new DatagramSocket()) {
-            udp.send(new DatagramPacket(b.array(), b.position(), InetAddress.getLoopbackAddress(), port));
-        }
+                .putInt(0).putInt((int) senderUs()).putInt(h.length).putShort((short) 0).putShort((short) delayUnits)
+                .put(h);
+        udp(true).send(new DatagramPacket(b.array(), b.position(), InetAddress.getLoopbackAddress(), port));
     }
 
     /**
@@ -162,14 +217,18 @@ final class TestSender {
     Thread streamSilence(int port, long ms) {
         Thread t = new Thread(() -> {
             byte[] f = silentOpus();
-            try (DatagramSocket udp = new DatagramSocket()) {
+            try {
+                DatagramSocket udp = udp(true);
                 InetAddress to = InetAddress.getLoopbackAddress();
                 long start = SystemClock.uptimeMillis();
+                long pts0 = senderUs();
                 for (int s = 0; SystemClock.uptimeMillis() - start < ms; s++) {
+                    // The pts of a 5 ms chunk, as an encoder stamps it: its first sample's capture time.
+                    long pts = pts0 + s * 5000L;
                     ByteBuffer b = ByteBuffer.allocate(MirrorSession.HEADER + f.length);
                     b.put((byte) 2).put((byte) 0).putShort((short) 0).putShort((short) 1).putShort((short) 0)
-                            .putInt(s).putInt((int) (SystemClock.uptimeMillis() * 1000)).putInt(f.length)
-                            .putShort((short) 0).putShort((short) 0).put(f);
+                            .putInt(s).putInt((int) pts).putInt(f.length)
+                            .putShort((short) 0).putShort((short) delayUnits).put(f);
                     udp.send(new DatagramPacket(b.array(), b.position(), to, port));
                     long next = start + (s + 1) * 5L;
                     long wait = next - SystemClock.uptimeMillis();
@@ -188,7 +247,8 @@ final class TestSender {
     void stream(int port, long ms) throws Exception {
         boolean hevc = codec.equals("video/hevc");
         List<byte[]> frames = accessUnits(readAsset(hevc ? "bench/hevc.h265" : "bench/avc.h264"), hevc);
-        try (DatagramSocket udp = new DatagramSocket()) {
+        {
+            DatagramSocket udp = udp(false);
             InetAddress to = InetAddress.getLoopbackAddress();
             long until = SystemClock.uptimeMillis() + ms;
             for (int i = 0; SystemClock.uptimeMillis() < until; i++) {
@@ -209,8 +269,8 @@ final class TestSender {
             int off = i * MirrorSession.SHARD, len = Math.min(MirrorSession.SHARD, f.length - off);
             ByteBuffer b = ByteBuffer.allocate(MirrorSession.HEADER + len);
             b.put((byte) 1).put((byte) flags).putShort((short) i).putShort((short) shards).putShort((short) 0)
-                    .putInt(s).putInt((int) (SystemClock.uptimeMillis() * 1000)).putInt(f.length)
-                    .putShort((short) 0).putShort((short) 0).put(f, off, len);
+                    .putInt(s).putInt((int) senderUs()).putInt(f.length)
+                    .putShort((short) 0).putShort((short) delayUnits).put(f, off, len);
             udp.send(new DatagramPacket(b.array(), b.position(), to, port));
         }
     }
@@ -255,6 +315,10 @@ final class TestSender {
     }
 
     void close() {
+        synchronized (this) {
+            if (videoUdp != null) videoUdp.close();
+            if (audioUdp != null) audioUdp.close();
+        }
         try {
             send(new JSONObject().put("t", "stop"));
             send(new JSONObject().put("t", "bye"));

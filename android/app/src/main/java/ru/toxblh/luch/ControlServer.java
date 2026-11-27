@@ -171,6 +171,11 @@ final class ControlServer {
                         // The sender's answer to something of ours; answering it would only bounce errors back.
                         Log.i(LuchService.TAG, "sender says: " + msg);
                         break;
+                    case "offset": {
+                        MirrorSession m = MirrorSession.current;
+                        if (m != null && m.control == control) m.onOffset(msg);
+                        break;
+                    }
                     case "sender_stats": {
                         MirrorSession m = MirrorSession.current;
                         if (m != null && m.control == control) m.onSenderStats(msg);
@@ -404,6 +409,8 @@ final class ControlServer {
                 // Android version, and what works worse on it than on 8.0+ (PROTOCOL.md, section 5).
                 .put("sdk", android.os.Build.VERSION.SDK_INT)
                 .put("limits", Caps.limits())
+                // Playing in step with other devices (PROTOCOL.md, section 4h).
+                .put("sync", SyncSession.capabilities(Calibration.enabled(context)))
                 // What the hardware says it can do, and what it measured (null until the bench has run).
                 .put("hw", Caps.collect(context))
                 .put("bench", Bench.cached(context) == null ? JSONObject.NULL : Bench.cached(context));

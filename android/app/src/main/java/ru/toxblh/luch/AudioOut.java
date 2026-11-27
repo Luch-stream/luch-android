@@ -7,18 +7,21 @@ import android.media.AudioTrack;
 import android.os.Build;
 
 import ru.toxblh.luch.sync.AudioClock;
+import ru.toxblh.luch.sync.AudioPlayout;
 
 /**
  * The session's AudioTrack, counting what was written and knowing when it will be heard: the track's own timestamps
- * where the route has them, the playback head and a guess where it has not (sync.AudioClock).
+ * where the route has them, the playback head and a guess where it has not (sync.AudioClock). It is also the output of
+ * the scheduled playout (sync.AudioPlayout).
  */
-final class AudioOut {
+final class AudioOut implements AudioPlayout.Output {
     final AudioTrack track;
     final int channels;
     final AudioClock clock;
     /** Frames written so far (the W of docs: sync, 6.4). */
     private long written;
     private boolean playing;
+    private long startedNs;
     private final AudioTimestamp ts = new AudioTimestamp();
     private long headWraps, lastHead;
     private final int frameBytes;
@@ -54,8 +57,60 @@ final class AudioOut {
         if (!playing) {
             track.play();
             playing = true;
+            startedNs = System.nanoTime();
         }
         return frames;
+    }
+
+    /** Whether the sender's clock is known too: the playout needs both. */
+    volatile java.util.concurrent.Callable<Boolean> senderClock = () -> false;
+    private java.nio.ByteBuffer shorts;
+
+    @Override
+    public long hearNs() {
+        return hearNs(System.nanoTime());
+    }
+
+    @Override
+    public int write(short[] pcm, int frames) {
+        int n;
+        if (Build.VERSION.SDK_INT >= 23) {
+            n = track.write(pcm, 0, frames * channels, AudioTrack.WRITE_NON_BLOCKING);
+            n = n <= 0 ? 0 : n / channels;
+        } else {
+            int bytes = frames * frameBytes;
+            if (shorts == null || shorts.capacity() < bytes) {
+                shorts = java.nio.ByteBuffer.allocateDirect(bytes).order(java.nio.ByteOrder.nativeOrder());
+            }
+            shorts.clear();
+            shorts.asShortBuffer().put(pcm, 0, frames * channels);
+            shorts.limit(bytes);
+            n = track.write(shorts, bytes, AudioTrack.WRITE_NON_BLOCKING);
+            n = n <= 0 ? 0 : n / frameBytes;
+        }
+        if (n > 0) {
+            written += n;
+            if (!playing) {
+                track.play();
+                playing = true;
+                startedNs = System.nanoTime();
+            }
+        }
+        return n;
+    }
+
+    @Override
+    public double framesPerSecond() {
+        return "timestamp".equals(clock.source()) ? clock.framesPerSecond() : 0;
+    }
+
+    @Override
+    public boolean ready() {
+        try {
+            return clock.valid() && senderClock.call();
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** Asks the track where it is, when the clock's schedule says so. */
@@ -67,8 +122,14 @@ final class AudioOut {
         } catch (RuntimeException e) {
             ok = false;
         }
+        String before = clock.source();
         clock.onTimestamp(ok, ts.framePosition, ts.nanoTime, nowNs);
         if (!"timestamp".equals(clock.source())) clock.onHead(head(), nowNs);
+        if (before == null && clock.source() != null) {
+            android.util.Log.i(LuchService.TAG, "audio clock: " + clock.source() + " after "
+                    + (nowNs - startedNs) / 1_000_000 + " ms, written " + written + ", head " + head()
+                    + (ok ? ", timestamp " + ts.framePosition : ", no timestamp"));
+        }
     }
 
     /** The playback head in frames, unwrapped (getPlaybackHeadPosition is an int that wraps after a day at 48 kHz). */
@@ -85,7 +146,8 @@ final class AudioOut {
     }
 
     /** Frames written and not yet taken by the mixer. */
-    int buffered() {
+    @Override
+    public int buffered() {
         return (int) Math.max(0, playing ? written - head() : written);
     }
 

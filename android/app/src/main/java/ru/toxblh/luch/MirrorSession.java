@@ -32,7 +32,10 @@ import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import ru.toxblh.luch.sync.AudioPlayout;
+import ru.toxblh.luch.sync.VideoScheduler;
 import ru.toxblh.luch.sync.Window;
+import ru.toxblh.luch.sync.Wire;
 
 /**
  * One mirroring session, PROTOCOL.md v1, built the way moonlight-common-c and moonlight-android receive video:
@@ -93,6 +96,8 @@ final class MirrorSession {
      */
     private final Window audioMs = new Window(2000), videoMs = new Window(600);
     private volatile AudioOut audioOut;
+    /** The scheduled playout's hard resyncs and concealed chunks so far, for stats. */
+    private volatile int audioResyncs = -1, audioConcealed;
     private DatagramSocket videoSocket, audioSocket;
     private volatile boolean ended;
     /** Ended because the same sender started again (it turned, or changed the size): the screen is not closed. */
@@ -127,7 +132,8 @@ final class MirrorSession {
     private long idrRequestedAt;
     private int droppedInRow;
     /** Decoder input pts (uptime µs at enqueue) → frame seq, for the stats line; written here, read by the renderer. */
-    private final long[] ptsRing = new long[64], seqRing = new long[64], holdRing = new long[64];
+    private final long[] ptsRing = new long[64], seqRing = new long[64], holdRing = new long[64],
+            senderPtsRing = new long[64], dueRing = new long[64], relRing = new long[64], decodedRing = new long[64];
     private int ringPos;
 
     // ---- counters (logged at the end and sent in stats) ----
@@ -195,10 +201,27 @@ final class MirrorSession {
         audioSync = a != null && a.optBoolean("sync", false);
         senderApp = start.optString("_app"); // put there by the control server from the sender's hello
         audioOnly = "audio".equals(start.optString("mode"));
+        sync = SyncSession.from(start);
+        android.hardware.display.DisplayManager dm = Compat.service(context,
+                android.hardware.display.DisplayManager.class);
+        android.view.Display d = dm == null ? null : dm.getDisplay(android.view.Display.DEFAULT_DISPLAY);
+        if (d != null && d.getRefreshRate() > 1) periodNs = Math.round(1e9 / d.getRefreshRate());
+    }
+
+    /** {"t":"offset","ms":N}: the slider moved or a calibration finished; it applies at once. */
+    void onOffset(JSONObject msg) {
+        if (sync == null) return;
+        sync.offsetMs = msg.optDouble("ms", sync.offsetMs);
+        if (msg.has("panel_ms")) sync.panelMs = msg.optDouble("panel_ms");
+        Log.i(LuchService.TAG, "sync offset " + sync.offsetMs + " ms");
     }
 
     /** Sound only (PROTOCOL.md 4d): no picture, the "now playing" screen instead of the mirror's. */
     final boolean audioOnly;
+    /** The sync part of a group session (PROTOCOL.md 4h), null for a sender without it. */
+    final SyncSession sync;
+    /** The display's refresh period, for releasing pictures at their time. */
+    private long periodNs = 16_666_667L;
 
     /** Opens both sockets and the screen; returns {video port, audio port}. */
     static synchronized int[] start(Context context, Control control, JSONObject msg) throws IOException {
@@ -332,6 +355,7 @@ final class MirrorSession {
         Log.i(LuchService.TAG, "decoder reset: " + why);
         MediaCodec d = decoder;
         decoder = null;
+        waiting.clear();
         if (d != null) {
             try {
                 d.stop();
@@ -352,7 +376,15 @@ final class MirrorSession {
         long lastPacket = SystemClock.uptimeMillis();
         boolean first = true;
         try {
+            // With a group the loop also wakes often: to send clock requests (when there is no audio socket for
+            // them) and to give waiting frames to the decoder on time.
+            if (sync != null) videoSocket.setSoTimeout(4);
             while (!ended) {
+                if (sync != null) {
+                    long us = System.nanoTime() / 1000;
+                    sync.poll(us);
+                    feedDue(System.nanoTime());
+                }
                 try {
                     videoSocket.receive(p);
                 } catch (SocketTimeoutException quiet) {
@@ -360,6 +392,7 @@ final class MirrorSession {
                     retryKeyframe();
                     continue;
                 }
+                if (sync != null && sync.onPacket(buf, p.getLength(), System.nanoTime() / 1000)) continue;
                 lastPacket = SystemClock.uptimeMillis();
                 bytesIn += p.getLength();
                 if (first) {
@@ -377,6 +410,10 @@ final class MirrorSession {
                 if ((flags & FLAG_PARITY) != 0) continue;      // FEC comes later
                 if (dataShards == 0 || dataShards > MAX_SHARDS || idx >= dataShards) continue;
                 if (frameLen <= 0 || frameLen > dataShards * SHARD) continue;
+                // The clock runs on the audio socket when there is one: it is the stream that needs it most.
+                if (sync != null && audioRate == 0) sync.mediaFrom(videoSocket, p.getAddress(), p.getPort());
+                curPts32 = h.getInt(12);
+                curDelayUs = Wire.delayUs(buf);
                 onShard(seq, idx, dataShards, flags, frameLen, hostLatency, buf, n);
                 retryKeyframe();
             }
@@ -436,7 +473,56 @@ final class MirrorSession {
             idrRequested = false;
             droppedInRow = 0;
         }
-        decode(frameBuf, curLen, idr, seq);
+        if (sync != null && sync.synced()) {
+            long now = System.nanoTime();
+            long full = sync.unwrap(curPts32, now / 1000);
+            sync.arrived(false, full, now / 1000);
+            if (curDelayUs > 0) {
+                // Its picture is due at pts + D: it waits here, compressed, until the decoder must have it.
+                long due = sync.toLocal(full + curDelayUs) * 1000 + Math.round((sync.offsetMs - sync.panelMs) * 1e6);
+                waiting.add(new Waiting(java.util.Arrays.copyOf(frameBuf, curLen), idr, seq, full, due));
+                if (waiting.size() > 120) {   // two seconds: the clock or D is badly off; better start over
+                    waiting.clear();
+                    lost("too many frames waiting");
+                    return;
+                }
+                feedDue(now);
+                return;
+            }
+            decode(frameBuf, curLen, idr, seq, full, 0);
+            return;
+        }
+        decode(frameBuf, curLen, idr, seq, Long.MIN_VALUE, 0);
+    }
+
+    /** A compressed frame waiting for its time (D > 0). */
+    private static final class Waiting {
+        final byte[] data;
+        final boolean idr;
+        final long seq, pts, dueNs;
+
+        Waiting(byte[] data, boolean idr, long seq, long pts, long dueNs) {
+            this.data = data;
+            this.idr = idr;
+            this.seq = seq;
+            this.pts = pts;
+            this.dueNs = dueNs;
+        }
+    }
+
+    private final java.util.ArrayDeque<Waiting> waiting = new java.util.ArrayDeque<>();
+    private int curPts32;
+    private long curDelayUs;
+    /** About how long a frame takes to decode (EWMA), for when to feed one. */
+    private volatile long decodeNs = 10_000_000L;
+
+    /** Gives the decoder every waiting frame whose picture is due within its decode time and three periods. */
+    private void feedDue(long nowNs) throws IOException {
+        while (!waiting.isEmpty() && decoder != null
+                && VideoScheduler.feedNs(waiting.peek().dueNs, decodeNs, periodNs) <= nowNs) {
+            Waiting w = waiting.poll();
+            decode(w.data, w.data.length, w.idr, w.seq, w.pts, w.dueNs);
+        }
     }
 
     private void lost(String why) {
@@ -459,7 +545,11 @@ final class MirrorSession {
 
     // ---- video: decode and render --------------------------------------------------------------------------
 
-    private void decode(byte[] frame, int len, boolean idr, long seq) throws IOException {
+    /**
+     * {@code pts}: the frame's full pts on the sender's clock, Long.MIN_VALUE without a clock; {@code dueNs}: when its
+     * picture is due (local ns), 0 for as soon as possible.
+     */
+    private void decode(byte[] frame, int len, boolean idr, long seq, long pts, long dueNs) throws IOException {
         int index;
         try {
             // Short normally; longer for an IDR and the first frames, while the decoder sets up its output buffers.
@@ -482,6 +572,10 @@ final class MirrorSession {
             synchronized (ptsRing) {
                 ptsRing[ringPos] = ptsUs;
                 seqRing[ringPos] = seq;
+                holdRing[ringPos] = 0;
+                senderPtsRing[ringPos] = pts;
+                dueRing[ringPos] = dueNs;
+                relRing[ringPos] = 0;
                 ringPos = (ringPos + 1) % ptsRing.length;
             }
             decoder.queueInputBuffer(index, 0, len, ptsUs, idr ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
@@ -523,26 +617,59 @@ final class MirrorSession {
         if (Build.VERSION.SDK_INT >= 23) {
             // When each frame really reached the display: decode, queue and the compositor, which the decode time
             // alone does not show. Its pts is the local time the frame went into the decoder.
-            decoder.setOnFrameRenderedListener((codec, ptsUs, nanoTime) -> {
-                synchronized (videoMs) {
-                    videoMs.add((nanoTime / 1000 - ptsUs) / 1000.0 - holdOf(ptsUs) / 1e6);
-                }
-            }, null);
+            decoder.setOnFrameRenderedListener((codec, ptsUs, nanoTime) -> onRendered(ptsUs, nanoTime), null);
         }
         thread(this::renderLoop, "luch-render");
         return true;
     }
 
-    /** Takes every decoded frame that is ready, draws only the newest one, at once. */
+    /**
+     * Takes every decoded frame that is ready. As soon as possible (D = 0): draws only the newest one, at once. With a
+     * due time (D > 0): each in turn, released at its time minus half a period so its VSYNC lands on it.
+     */
     private void renderLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
         MediaCodec codec = decoder;
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+        boolean watching = sync != null && "watch".equals(sync.mode);
         try {
             while (!ended) {
                 int index = codec.dequeueOutputBuffer(info, 50_000);
                 if (index < 0) continue;
                 long pts = info.presentationTimeUs;
+                long now = System.nanoTime();
+                long due;
+                synchronized (ptsRing) {
+                    int i = ring(pts);
+                    due = i < 0 ? 0 : dueRing[i];
+                    if (i >= 0) decodedRing[i] = now;
+                }
+                decodeNs += (now - pts * 1000 - decodeNs) / 16;
+                if (due != 0) {
+                    if (surface == null) {
+                        codec.releaseOutputBuffer(index, false);
+                        framesDropped++;
+                        continue;
+                    }
+                    long rel = VideoScheduler.releaseNs(due, now, periodNs, watching, false);
+                    long wait = VideoScheduler.holdUntilNs(rel, periodNs) - System.nanoTime();
+                    if (wait > 0) SystemClock.sleep(Math.max(1, wait / 1_000_000));
+                    synchronized (ptsRing) {
+                        int i = ring(pts);
+                        if (i >= 0) relRing[i] = rel;
+                    }
+                    codec.releaseOutputBuffer(index, rel);
+                    framesRendered++;
+                    decodeUsSum += now / 1000 - pts;
+                    decodeCount++;
+                    if (Build.VERSION.SDK_INT < 23) {
+                        synchronized (videoMs) {
+                            videoMs.add((now / 1000 - pts) / 1000.0 + periodNs / 1e6);
+                        }
+                    }
+                    markShown(pts, 0);
+                    continue;
+                }
                 int next;
                 while ((next = codec.dequeueOutputBuffer(info, 0)) >= 0) {
                     codec.releaseOutputBuffer(index, false);   // an older frame: skip it
@@ -558,24 +685,16 @@ final class MirrorSession {
                 long hold = videoHoldNs;
                 codec.releaseOutputBuffer(index, System.nanoTime() + hold);
                 framesRendered++;
-                long now = System.nanoTime() / 1000;
+                now = System.nanoTime() / 1000;
                 if (Build.VERSION.SDK_INT < 23) {
                     // No render callback: decode time and one refresh period stand for the path to the display.
                     synchronized (videoMs) {
-                        videoMs.add((now - pts) / 1000.0 + 1000.0 / 60);
+                        videoMs.add((now - pts) / 1000.0 + periodNs / 1e6);
                     }
                 }
                 decodeUsSum += now - pts;
                 decodeCount++;
-                synchronized (ptsRing) {
-                    for (int i = 0; i < ptsRing.length; i++) {
-                        if (ptsRing[i] == pts) {
-                            shownSeq = seqRing[i];
-                            holdRing[i] = hold;
-                            break;
-                        }
-                    }
-                }
+                markShown(pts, hold);
             }
         } catch (IllegalStateException e) {
             if (!ended && codec == decoder) {   // a reset decoder ends quietly
@@ -585,12 +704,48 @@ final class MirrorSession {
         }
     }
 
-    /** The hold a frame was released with, by its decoder pts (ns). */
-    private long holdOf(long ptsUs) {
+    /** The frame of decoder pts {@code pts} is on its way to the screen: for shown_seq and the render callback. */
+    private void markShown(long pts, long hold) {
         synchronized (ptsRing) {
-            for (int i = 0; i < ptsRing.length; i++) if (ptsRing[i] == ptsUs) return holdRing[i];
+            int i = ring(pts);
+            if (i >= 0) {
+                shownSeq = seqRing[i];
+                holdRing[i] = hold;
+            }
         }
-        return videoHoldNs;
+    }
+
+    /**
+     * A frame reached the display (API 23+). Its decoder pts is the local µs it went into the decoder. Without a
+     * schedule: input to display, without the hold (phase 0). With one: decode plus what the display added after the
+     * release time, how far from its due time it was shown, and its pts → display for an interactive sender.
+     */
+    private void onRendered(long ptsUs, long nanoTime) {
+        long hold, sender, due, rel, decoded;
+        synchronized (ptsRing) {
+            int i = ring(ptsUs);
+            if (i < 0) return;
+            hold = holdRing[i];
+            sender = senderPtsRing[i];
+            due = dueRing[i];
+            rel = relRing[i];
+            decoded = decodedRing[i];
+        }
+        double path = due == 0 ? (nanoTime / 1000 - ptsUs) / 1000.0 - hold / 1e6
+                : (decoded - ptsUs * 1000 + Math.max(0, nanoTime - rel)) / 1e6;
+        synchronized (videoMs) {
+            videoMs.add(path);
+        }
+        if (sync != null && sender != Long.MIN_VALUE) {
+            sync.videoShown((nanoTime / 1000 - sync.toLocal(sender)) / 1000.0);
+            if (due != 0) sync.presented(false, (nanoTime - due) / 1e6);
+        }
+    }
+
+    /** The ring slot of a decoder pts, or -1; under ptsRing's lock. */
+    private int ring(long ptsUs) {
+        for (int i = 0; i < ptsRing.length; i++) if (ptsRing[i] == ptsUs) return i;
+        return -1;
     }
 
     // ---- audio ---------------------------------------------------------------------------------------------
@@ -611,19 +766,55 @@ final class MirrorSession {
         int bufMs = 0, underruns = 0;
         long checkedAt = SystemClock.uptimeMillis();
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+        // With a group (PROTOCOL.md 4h): the clock exchanges run on this socket, and packets with D > 0 are played at
+        // pts + D instead of at once. The loop then also wakes every 2 ms to keep the track filled on time.
+        AudioPlayout playout = null;
+        int target = 0, resyncsSeen = 0;
+        long lastDecodeNs = 0;
+        // What the scheduled playout needs of each packet in the decoder, {seq, pts, D, arrival}, in order: an Opus
+        // decoder gives one output per input, in order (its own output pts are shifted by the pre-skip).
+        java.util.ArrayDeque<long[]> pending = new java.util.ArrayDeque<>();
         try {
+            if (sync != null) audioSocket.setSoTimeout(2);
             while (!ended) {
+                boolean got = true;
                 try {
                     audioSocket.receive(p);
                 } catch (SocketTimeoutException quiet) {
-                    continue;
+                    got = false;
                 }
                 long arrived = System.nanoTime();
+                if (sync != null) {
+                    long us = arrived / 1000;
+                    sync.poll(us);
+                    if (got && sync.onPacket(buf, p.getLength(), us)) got = false;
+                    if (playout != null && out != null) {
+                        out.poll(arrived);
+                        sync.tick(us);
+                        long offsetNs = Math.round(sync.offsetMs * 1e6);
+                        SyncSession ss = sync;
+                        playout.fill(out, arrived, target, x -> ss.toLocal(x) * 1000 + offsetNs, sync.skew());
+                        sync.setPlaying(playout.aligned());
+                        if (playout.aligned()) sync.presented(true, playout.lastErrorNs() / 1e6);
+                        audioResyncs = playout.hardResyncs();
+                        audioConcealed = playout.concealed();
+                        if (playout.hardResyncs() != resyncsSeen) {
+                            resyncsSeen = playout.hardResyncs();
+                            Log.i(LuchService.TAG, "audio resync at chunk " + playout.lastHardSeq() + ": error "
+                                    + Math.round(playout.lastErrorNs() / 1e5) / 10.0 + " ms, clock jumps "
+                                    + out.clock.jumps() + ", underruns " + track.getUnderrunCount());
+                        }
+                    }
+                }
+                if (!got) continue;
                 int n = p.getLength();
                 if (n < HEADER || (buf[0] & 0xff) != KIND_AUDIO) continue;
+                if (sync != null) sync.mediaFrom(audioSocket, p.getAddress(), p.getPort());
                 int flags = buf[1] & 0xff;
                 long seq = h.getInt(8) & 0xffffffffL;
                 int len = Math.min(h.getInt(16), n - HEADER);
+                long delay = Wire.delayUs(buf);
+                int pts32 = h.getInt(12);
                 if (len <= 0) continue;
                 byte[] data = new byte[len];
                 System.arraycopy(buf, HEADER, data, 0, len);
@@ -631,6 +822,7 @@ final class MirrorSession {
                     if (dec == null) {
                         dec = opusDecoder(data);
                         out = new AudioOut(audioTrack(), audioRate, audioChannels);
+                        if (sync != null) out.senderClock = sync::synced;
                         track = out.track;
                         activeTrack = track;
                         audioOut = out;
@@ -638,8 +830,10 @@ final class MirrorSession {
                         int frames;
                         if (Build.VERSION.SDK_INT >= 24) {
                             // The system may hand out a far larger buffer than asked for (6924 frames, 144 ms, on the
-                            // XGIMI): use only about 20 ms of it, so audio cannot fall behind the picture.
+                            // XGIMI): use only about 20 ms of it, so audio cannot fall behind the picture. Scheduled,
+                            // it keeps two frames and 10 ms in the track.
                             int want = audioRate * Math.max(4 * audioFrameMs, 20) / 1000;
+                            if (sync != null) want = Math.max(want, audioRate * (2 * audioFrameMs + 10) / 1000);
                             frames = track.setBufferSizeInFrames(want);
                             Log.i(LuchService.TAG, "audio track: capacity " + track.getBufferCapacityInFrames()
                                     + " frames, using " + frames);
@@ -651,6 +845,9 @@ final class MirrorSession {
                         audioLatencyMs = frames * 1000 / audioRate;
                         if (audioSync) videoHoldNs = audioLatencyMs * 1_000_000L;
                         bufMs = frames * 1000 / audioRate;
+                        // Scheduled, the track is kept full: a track starts playing only once its buffer is full
+                        // (the start threshold), so a fill short of it would never start.
+                        target = frames;
                         // Not played yet: a fast track that runs dry before the first sound arrives (the first half
                         // second is dropped below) is switched off by the mixer and stays silent for the session.
                         // It starts with the first sound written.
@@ -662,9 +859,11 @@ final class MirrorSession {
                 if (track != null && Build.VERSION.SDK_INT >= 24 && SystemClock.uptimeMillis() - checkedAt >= 1000) {
                     checkedAt = SystemClock.uptimeMillis();
                     int u = track.getUnderrunCount();
+                    if (u > underruns && playout != null) out.clock.rewarm();
                     if (u > underruns && bufMs < MAX_AUDIO_BUFFER_MS) {
                         bufMs += AUDIO_BUFFER_STEP_MS;
                         int frames = track.setBufferSizeInFrames(audioRate * bufMs / 1000);
+                        target = frames;
                         audioLatencyMs = frames * 1000 / audioRate;
                         if (audioSync) videoHoldNs = audioLatencyMs * 1_000_000L;
                         Log.i(LuchService.TAG, "audio underruns " + u + ": buffer now " + audioLatencyMs + " ms");
@@ -673,8 +872,22 @@ final class MirrorSession {
                 }
                 if (dec == null || seq <= lastSeq) continue;
                 lastSeq = seq;
-                // Moonlight drops the first half second: the pipeline settles and would otherwise build a backlog.
-                if (SystemClock.uptimeMillis() - startedAt < 500) continue;
+                boolean scheduled = sync != null && delay > 0;
+                if (scheduled && playout == null) {
+                    playout = new AudioPlayout(audioRate, audioChannels);
+                    Log.i(LuchService.TAG, "audio at pts + " + delay / 1000 + " ms (" + sync.role + ", " + sync.mode + ")");
+                }
+                if (scheduled && sync.synced()) {
+                    long us = arrived / 1000;
+                    long full = sync.unwrap(pts32, us);
+                    sync.arrived(true, full, us);
+                    pending.add(new long[]{seq, full, delay, arrived});
+                    if (pending.size() > 200) pending.clear();   // a decoder that keeps nothing: do not grow
+                } else if (!scheduled && SystemClock.uptimeMillis() - startedAt < 500) {
+                    // Moonlight drops the first half second: the pipeline settles and would otherwise build a backlog.
+                    continue;
+                }
+                if (scheduled && !sync.synced()) continue;   // its time cannot be known yet
                 int in = dec.dequeueInputBuffer(5_000);
                 if (in >= 0) {
                     ByteBuffer b = dec.getInputBuffer(in);
@@ -685,13 +898,25 @@ final class MirrorSession {
                 int outIndex;
                 while ((outIndex = dec.dequeueOutputBuffer(info, 0)) >= 0) {
                     ByteBuffer o = dec.getOutputBuffer(outIndex);
-                    if (info.size > 0 && o != null) {
+                    long now = System.nanoTime();
+                    long[] meta = playout != null ? pending.poll() : null;
+                    if (info.size > 0 && o != null && playout != null && meta != null) {
+                        // Scheduled: the chunk waits in the playout until its time.
+                        short[] chunk = new short[info.size / 2];
+                        o.position(info.offset);
+                        o.order(ByteOrder.nativeOrder()).asShortBuffer().get(chunk);
+                        playout.push(meta[0], meta[1], meta[2], chunk);
+                        lastDecodeNs = now - meta[3];
+                        out.poll(now);
+                        synchronized (audioMs) {
+                            audioMs.add((lastDecodeNs + out.hearNs(now) - now) / 1e6);
+                        }
+                    } else if (info.size > 0 && o != null && playout == null) {
                         if (pcm.length < info.size) pcm = new byte[info.size];
                         o.position(info.offset);
                         o.get(pcm, 0, info.size);
                         // The track holds about two frames; when it is full the rest is dropped rather than queued,
                         // so audio never drifts behind the picture.
-                        long now = System.nanoTime();
                         out.poll(now);
                         long hear = out.hearNs(now);
                         if (out.write(pcm, 0, info.size) > 0) {
@@ -711,6 +936,10 @@ final class MirrorSession {
         } finally {
             activeTrack = null;
             audioOut = null;
+            if (playout != null) {
+                Log.i(LuchService.TAG, "audio playout: " + playout.hardResyncs() + " resyncs, " + playout.concealed()
+                        + " concealed, " + playout.dropped() + " dropped, " + playout.repeated() + " repeated");
+            }
             if (out != null) out.release();
             if (dec != null) {
                 try {
@@ -899,7 +1128,7 @@ final class MirrorSession {
             double hostMs = hc == 0 ? 0 : hs / (double) hc / 10.0;
             MirrorActivity.showStats(overlay(decodeMs, hostMs, count, bytes * 8 / 1e6));
             publishLive(decodeMs, hostMs, count, bytes * 8 / 1e6);
-            if (count == 0) continue;
+            if (count == 0 && sync == null) continue;   // a group's speaker reports without pictures too
             JSONObject outPaths = paths();
             try {
                 JSONObject s = new JSONObject().put("t", "stats")
@@ -912,7 +1141,12 @@ final class MirrorSession {
                         .put("decoder", decoderName)
                         .put("audio_latency_ms", audioLatencyMs)
                         .put("video_hold_ms", videoHoldNs / 1_000_000);
-                if (outPaths != null) s.put("out", outPaths);
+                if (sync != null) {
+                    if (outPaths == null) outPaths = new JSONObject();
+                    sync.stats(s, outPaths, outPaths.optDouble("audio_ms", Double.NaN),
+                            outPaths.optDouble("video_ms", Double.NaN));
+                }
+                if (outPaths != null && outPaths.length() > 0) s.put("out", outPaths);
                 // Thermal headroom rises toward 1.0 before severe throttling, so a sender can warn early.
                 double headroom = DeviceState.headroom(context);
                 if (headroom >= 0) s.put("thermal_headroom", Math.round(headroom * 100) / 100.0);
@@ -955,6 +1189,7 @@ final class MirrorSession {
             if (o != null && o.clock.source() != null) out.put("audio_src", o.clock.source());
             if (o != null) out.put("route", o.route());
             if (!Double.isNaN(v)) out.put("video_ms", round1(v));
+            if (audioResyncs >= 0) out.put("audio_resyncs", audioResyncs).put("audio_concealed", audioConcealed);
             return out;
         } catch (JSONException e) {
             return null;
