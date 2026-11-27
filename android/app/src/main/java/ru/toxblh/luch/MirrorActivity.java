@@ -56,6 +56,12 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // The app opts into the new back handling (Android 13+), where onBackPressed is no longer called: without this,
+        // Back closed the screen and the session ended a second later as "screen_closed" instead of "back" at once.
+        if (Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::onBackPressed);
+        }
         // A sender may start while the TV's screen is asleep (issue #1): come up over it and turn it on.
         if (Build.VERSION.SDK_INT >= 27) {
             setShowWhenLocked(true);

@@ -68,6 +68,12 @@ public class PhotoActivity extends Activity {
         root.addView(message, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
         setContentView(root);
+        // Android 13+ calls no onBackPressed for this app (it opts into the new back handling): the sender must still
+        // hear "back".
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::onBackPressed);
+        }
         swipe = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
             @Override
             public boolean onFling(MotionEvent a, MotionEvent b, float vx, float vy) {

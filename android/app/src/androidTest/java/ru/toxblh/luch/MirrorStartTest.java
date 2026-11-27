@@ -3,6 +3,7 @@ package ru.toxblh.luch;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -91,9 +92,12 @@ public class MirrorStartTest {
         assertTrue("screen still asleep", Compat.service(context, PowerManager.class).isInteractive());
     }
 
-    /** A screen that closes before the first picture says so, instead of blaming the decoder. */
+    /**
+     * Home before the first picture: on Android 8+ the session goes on without the screen (muted, a stand-in surface)
+     * until the screen comes back or 15 minutes pass; before 8 it ends, saying the screen closed, not the decoder.
+     */
     @Test
-    public void screenClosedBeforeThePictureIsReportedAsSuch() throws Exception {
+    public void homeBeforeThePictureKeepsTheSessionOrSaysTheScreenClosed() throws Exception {
         int port = sender.start();
         waitFor(() -> MirrorActivity.isShown(), 10_000, "mirror screen did not open");
         shell("input keyevent KEYCODE_HOME");
@@ -102,12 +106,19 @@ public class MirrorStartTest {
         JSONObject stop = null;
         for (JSONObject m : sender.drain()) {
             String t = m.getString("t");
-            if ("error".equals(t)) fail("expected a stop, got " + m);
+            if ("error".equals(t)) fail("expected no error, got " + m);
             if ("stop".equals(t)) stop = m;
         }
-        assertNotNull("no stop from the receiver", stop);
-        assertEquals("receiver", stop.optString("by"));
-        assertEquals("screen_closed", stop.optString("reason"));
+        if (MirrorSession.canStayAway()) {
+            assertNull("the session goes on away from the screen: " + stop, stop);
+            MirrorSession s = MirrorSession.current;
+            assertNotNull("session still there", s);
+            assertTrue("and knows it is away", s.isAway());
+        } else {
+            assertNotNull("no stop from the receiver", stop);
+            assertEquals("receiver", stop.optString("by"));
+            assertEquals("screen_closed", stop.optString("reason"));
+        }
     }
 
     /** Back still ends the session at once, without the grace a stopped screen gets. */

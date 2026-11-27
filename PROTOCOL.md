@@ -63,7 +63,8 @@ sender   → {"t":"sender_stats","rtt_ms":..,"host_ms":..,"fps":..,"mbps":..,"en
 ```
 
 The receiver ends a session itself with `reason` `back` (Back on the remote) or `screen_closed` (Home, another app
-on top, or the screen staying off). A TV whose screen is asleep is woken by `start`; the picture may be stopped for a
+on top, or the screen staying off; on Android 8+ the session first goes on without the screen, muted, and ends with
+`away_timeout` after 15 minutes if the screen does not come back). A TV whose screen is asleep is woken by `start`; the picture may be stopped for a
 moment while the TV wakes up, so a stopped screen gets a second to come back before the session counts as closed,
 and the receiver asks for a `keyframe` for the new surface. If the system will not open the screen at all (for 5 s
 after Home on older Android, or without the "display over other apps" permission), the receiver asks again each
