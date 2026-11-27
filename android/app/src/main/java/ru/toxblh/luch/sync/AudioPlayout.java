@@ -66,6 +66,14 @@ public final class AudioPlayout {
     private short[] work = new short[0];
     private final short[] prev;
     private boolean havePrev;
+    /** A calibration's sweeps, while they are to be played (ProbePlay). */
+    private ProbePlay probe;
+    /** The pts of each frame about to be written (µs, NaN for none), only while a probe is on. */
+    private double[] framePts = new double[0];
+    /** The pts the silence being written stands for (a chunk that did not come), NaN for a resync's silence. */
+    private double silencePtsUs = Double.NaN;
+    /** The pts of the last frame written that had one (µs), NaN before any. */
+    private double lastPtsUs = Double.NaN;
 
     public AudioPlayout(int rate, int channels) {
         this.rate = rate;
@@ -113,6 +121,22 @@ public final class AudioPlayout {
         aligned = false;
         integral = s = acc = 0;
         havePrev = false;
+        probe = null;
+        silencePtsUs = lastPtsUs = Double.NaN;
+    }
+
+    /**
+     * Plays a calibration's sweeps at their pts (ProbePlay), replacing any before; null drops it. False when the
+     * playout is not running yet or the first sweep's pts was already written: too late to place it.
+     */
+    public boolean probe(ProbePlay p) {
+        if (p == null) {
+            probe = null;
+            return true;
+        }
+        if (!aligned || lastPtsUs >= p.firstPtsUs()) return false;
+        probe = p;
+        return true;
     }
 
     /**
@@ -208,6 +232,7 @@ public final class AudioPlayout {
         if (out.hearNs() < want.at(missingPts + curDelay) - HARD_NS) return false;   // still early enough to wait
         // Its time has come and it is not here: silence of its length, with a fade in after.
         silenceLeft = (int) Math.round(chunkUs * rate / 1e6);
+        silencePtsUs = missingPts;
         curPts = missingPts;
         nextSeq++;
         concealed++;
@@ -266,6 +291,7 @@ public final class AudioPlayout {
     /** Writes silence for an early error, skips sound for a late one, and fades in after. */
     private void adjust(long e) {
         integral = 0;
+        silencePtsUs = Double.NaN;
         if (e < 0) silenceLeft = (int) Math.round(-e * rate / 1e9);
         else skipLeft = (int) Math.round(e * rate / 1e9);
         fadeInLeft = fadeFrames;
@@ -275,7 +301,40 @@ public final class AudioPlayout {
     private int writeSilence(Output out, int frames) {
         if (work.length < frames * channels) work = new short[frames * channels];
         java.util.Arrays.fill(work, 0, frames * channels, (short) 0);
-        return out.write(work, frames);
+        boolean probing = probing(frames);
+        if (probing) {
+            for (int i = 0; i < frames; i++) framePts[i] = silencePtsUs + i * 1e6 / rate;
+        }
+        int took = writeOut(out, frames, probing);
+        if (took > 0 && !Double.isNaN(silencePtsUs)) {
+            lastPtsUs = silencePtsUs + (took - 1) * 1e6 / rate;
+            silencePtsUs += took * 1e6 / rate;
+        }
+        return took;
+    }
+
+    /** Whether a probe is on; if so, room for the pts of {@code frames} frames. */
+    private boolean probing(int frames) {
+        if (probe == null || !probe.active()) return false;
+        if (framePts.length < frames) framePts = new double[frames];
+        return true;
+    }
+
+    /** Writes {@code frames} of {@code work}, with the probe's sweeps put in when one is on. */
+    private int writeOut(Output out, int frames, boolean probing) {
+        if (!probing) return out.write(work, frames);
+        long hear = out.hearNs();
+        double r = out.framesPerSecond();
+        double nsPerFrame = 1e9 / (r > 0 ? r : rate);
+        probe.mark();
+        probe.apply(work, channels, frames, framePts, hear, nsPerFrame);
+        int took = out.write(work, frames);
+        if (took < frames) {
+            // Fewer taken than offered: the probe is where those frames left it.
+            probe.reset();
+            probe.apply(null, channels, took, framePts, hear, nsPerFrame);
+        }
+        return took;
     }
 
     /**
@@ -285,6 +344,7 @@ public final class AudioPlayout {
     private int writeStuffed(Output out, int n) {
         int max = n + 2;
         if (work.length < max * channels) work = new short[max * channels];
+        boolean probing = probing(max);
         int o = 0, used = 0;
         while (used < n) {
             int src = (curPos + used) * channels;
@@ -304,10 +364,12 @@ public final class AudioPlayout {
                     int before = o > 0 ? work[(o - 1) * channels + c] : havePrev ? prev[c] : cur[src + c];
                     work[o * channels + c] = (short) ((before + cur[src + c]) / 2);
                 }
+                if (probing) framePts[o] = curPts + (curPos + used) * 1e6 / rate;
                 o++;
                 repeated++;
             }
             System.arraycopy(cur, src, work, o * channels, channels);
+            if (probing) framePts[o] = curPts + (curPos + used) * 1e6 / rate;
             o++;
             used++;
         }
@@ -322,7 +384,7 @@ public final class AudioPlayout {
                 for (int c = 0; c < channels; c++) work[i * channels + c] = (short) (work[i * channels + c] * g);
             }
         }
-        int took = out.write(work, o);
+        int took = writeOut(out, o, probing);
         if (took < o) {
             // The output took less than offered: count back what it did not take (rare; it said it had room).
             used = Math.max(0, used - (o - took));
@@ -332,6 +394,7 @@ public final class AudioPlayout {
             havePrev = true;
         }
         curPos += used;
+        if (used > 0) lastPtsUs = curPts + (curPos - 1) * 1e6 / rate;
         return took;
     }
 

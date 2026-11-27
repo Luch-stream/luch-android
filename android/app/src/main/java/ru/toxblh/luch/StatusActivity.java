@@ -944,17 +944,14 @@ public class StatusActivity extends Activity {
             card.addView(line, lp);
             card.addView(sleepRow());
         }
-        // Sync's acoustic calibration, as a dry run only: off unless turned on, and even then it never plays or listens.
+        // Sync's acoustic calibration plays only when a sender asks; here its detector runs on a recording made up in
+        // memory, silently.
         View line = new View(this);
         line.setBackgroundColor(Ui.DIVIDER);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
         lp.setMargins(dp(20), 0, dp(20), 0);
         card.addView(line, lp);
-        card.addView(switchRow(getString(R.string.setting_calibration), Calibration.enabled(this), (b, on) -> {
-            Calibration.setEnabled(this, on);
-            render();
-        }));
-        if (Calibration.enabled(this)) card.addView(dryRunRow());
+        card.addView(dryRunRow());
         content.addView(card, Ui.below(this, 20));
     }
 

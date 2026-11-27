@@ -6,8 +6,8 @@ import java.util.Random;
 /**
  * The calibration without a sound: a recording made up in memory (four sweeps arriving after a random delay, with a
  * direct path, three reflections, one of them louder than the direct sound, and noise), measured by the real Probe.
- * It shows on the device that the detector runs and how fast; the real run, which plays and listens, is for a daytime
- * test by hand.
+ * It shows on the device that the detector runs and how fast; in the real run the receiver plays (ProbePlay) and the
+ * sender's microphone listens.
  */
 public final class DryRun {
     public static final int RATE = 48000, SWEEPS = 4;

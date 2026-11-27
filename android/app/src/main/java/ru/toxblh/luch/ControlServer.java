@@ -318,10 +318,13 @@ final class ControlServer {
                         if (m != null && m.control == control) m.input.onGrant(msg);
                         break;
                     }
-                    case "probe":
-                        // The acoustic calibration (PROTOCOL.md 4k): only as a dry run, and only when turned on.
-                        send(out, Calibration.answer(context, msg));
+                    case "probe": {
+                        // The acoustic calibration (PROTOCOL.md 4k): only into a group of this sender playing here.
+                        MirrorSession m = MirrorSession.current;
+                        if (m != null && m.control == control) m.onProbe(msg);
+                        else send(out, Calibration.error(msg, Calibration.NOT_PLAYING, null));
                         break;
+                    }
                     case "offset": {
                         MirrorSession m = MirrorSession.current;
                         if (m != null && m.control == control) m.onOffset(msg);
@@ -911,7 +914,7 @@ final class ControlServer {
                 .put("sdk", android.os.Build.VERSION.SDK_INT)
                 .put("limits", Caps.limits())
                 // Playing in step with other devices (PROTOCOL.md, section 4k).
-                .put("sync", SyncSession.capabilities(Calibration.enabled(context)))
+                .put("sync", SyncSession.capabilities())
                 // What the hardware says it can do, and what it measured (null until the bench has run).
                 .put("hw", Caps.collect(context))
                 // What could control the sender from here (4i).

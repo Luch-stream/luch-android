@@ -610,7 +610,7 @@ packet, so a change of D hits the same frame everywhere. The design and its numb
 `docs/research/sync-multiroom.md`.
 
 ```
-receiver → welcome adds "sync":{"v":1,"clock":true,"probe":false,"mic":false}
+receiver → welcome adds "sync":{"v":1,"clock":true,"probe":true,"mic":false}
 sender   → start adds  "group":{"id":"<uuid>","timeline":<u32>,"role":"video"|"audio"|"both",
                                 "mode":"interactive"|"watch","tolerance_ms":20,"offset_ms":<signed>}
 receiver → stats adds  "clock":{"err_us":N,"skew_ppm":F,"rtt_us":N},"need_ms":F,"sync_err_ms":F,
@@ -651,11 +651,33 @@ sender   → {"t":"offset","ms":<signed>}       this receiver's own correction, 
   of its own need and the TVs' `video_pts_ms`; only a speaker slower than the picture plus `tolerance_ms` holds the
   picture, by the excess.
 - **Calibration.** What the platform cannot see (an ARC soundbar's DSP, a projector's processing) is measured by
-  sound: each receiver plays 2–6 kHz log sweeps at times on the sender's clock, one microphone records, and the
-  sender sets `offset` so that all arrive together. `{"t":"probe","id":"..","at":<sender µs>,"signal":"sweep",
-  "f0":2000,"f1":6000,"ms":200,"n":4,"gap_ms":500,"gain":0.3}` is answered with `{"t":"probe_done","id":"..",
-  "played":[<sender µs>..]}`. This version answers only as a dry run (`"dry_run":true`, nothing played) and only when
-  the receiver's setting for it is on (welcome `sync.probe`); otherwise `{"t":"error","code":"probe_off"}`.
+  sound: during a group session each member plays 2–6 kHz log sweeps, one at a time, the sender's microphone
+  records, and the sender sets `offset` so that all arrive together.
+
+  ```
+  sender   → {"t":"probe","id":"..","at":<pts µs>,"signal":"sweep","f0":2000,"f1":6000,"ms":200,"n":4,
+              "gap_ms":500,"gain":0.3}
+  receiver → {"t":"probe_done","id":"..","played":[<sender µs> ×n],"src":"timestamp"|"head"}
+             or {"t":"error","for":"probe","id":"..","code":"not_playing"|"probe_off"|"not_synced"|"late"|
+                 "bad_request","detail":".."}
+  ```
+
+  - `at` is a pts of the audio stream: sweep i is put into the scheduled sound at pts `at + i·(ms + gap_ms)·1000`,
+    replacing the program sound (crossfaded over the sweep's own 5 ms raised-cosine fades), at `gain` of full scale
+    (at most 0.5). So it is heard like the program sound of that pts: at `local(pts + D) + offset`, D the audio
+    packets' own. Leave room: `at` must still be ahead of what the receiver has written (D plus a little), else
+    `late`; more than 30 s ahead is `bad_request`.
+  - `played[i]`: the sender's µs at which sweep i's first sample reaches the DAC by the receiver's own reckoning when
+    it was written (the track's timestamps, `src` `timestamp`; or the playback head and a 20 ms guess, `head`: trust
+    it less), offset included: about `pts + D + offset`. `probe_done` comes once the last sweep has been heard.
+  - The sender takes `c = median(heard − played)` per receiver (all `n` sweeps trusted, within 0.5 ms): what lies
+    after the DAC, plus the air and the microphone's own latency, which is the same for all. The offset already in
+    use is inside `played`, so the result is absolute: the new `offset_ms = max(c) − c` for each receiver (luch-linux
+    `offsets_from_heard`), sent with `offset`, not added to the old one.
+  - Played only for the sender whose group session is playing here (else `not_playing`), when this receiver plays
+    its sound (role `audio` or `both`, else `probe_off`), with the clock synced (else `not_synced`) and the sound
+    running and not muted (else `not_playing`). A new probe replaces one still running; an ended session or sound
+    that stops gives `not_playing`. `sync.probe` in the welcome: the receiver plays probes.
 - **Receiver rules.** The sound plays at `pts + D + offset`: silence or a skip with 3 ms fades beyond 20 ms of error,
   below it single frames dropped or repeated at most 0.1 %; a chunk not there in time is silence of its length. A
   picture is released at `pts + D + offset − P/2` (P the display period), so the VSYNC at or after lands on it.

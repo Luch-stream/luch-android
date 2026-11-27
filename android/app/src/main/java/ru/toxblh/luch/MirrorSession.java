@@ -34,6 +34,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 import ru.toxblh.luch.sync.AudioPlayout;
+import ru.toxblh.luch.sync.ProbePlay;
 import ru.toxblh.luch.sync.VideoScheduler;
 import ru.toxblh.luch.sync.Window;
 import ru.toxblh.luch.sync.Wire;
@@ -227,6 +228,45 @@ final class MirrorSession {
         sync.offsetMs = msg.optDouble("ms", sync.offsetMs);
         if (msg.has("panel_ms")) sync.panelMs = msg.optDouble("panel_ms");
         Log.i(LuchService.TAG, "sync offset " + sync.offsetMs + " ms");
+    }
+
+    /** A calibration's sweeps asked for (PROTOCOL.md 4k), waiting for the audio thread to take them. */
+    private static final class Probing {
+        final JSONObject msg;
+        final ProbePlay play;
+        /** Local ns after which it is given up (the sound stopped coming): set by the audio thread. */
+        long deadlineNs;
+
+        Probing(JSONObject msg, ProbePlay play) {
+            this.msg = msg;
+            this.play = play;
+        }
+    }
+
+    private final java.util.concurrent.atomic.AtomicReference<Probing> probeAsked =
+            new java.util.concurrent.atomic.AtomicReference<>();
+    /** The scheduled sound is running: aligned, the track's clock and the sender's known. */
+    private volatile boolean soundScheduled;
+
+    /**
+     * {"t":"probe"} from this session's sender: its sweeps go into the scheduled sound at their pts (sync.ProbePlay),
+     * probe_done follows once the last one has been heard; or an error at once (Calibration.refusal).
+     */
+    void onProbe(JSONObject msg) {
+        boolean sound = sync != null && sync.wantsAudio() && audioRate > 0;
+        boolean synced = sync != null && sync.synced();
+        String why = Calibration.refusal(sync != null, sound, synced, soundScheduled && awaySince == 0);
+        if (why != null) {
+            control.send(Calibration.error(msg, why, null));
+            return;
+        }
+        try {
+            ProbePlay p = Calibration.sweeps(msg, audioRate, sync.toSender(System.nanoTime() / 1000));
+            probeAsked.set(new Probing(msg, p));
+            Log.i(LuchService.TAG, "calibration: " + p.sweeps() + " sweeps from pts " + p.firstPtsUs());
+        } catch (IllegalArgumentException e) {
+            control.send(Calibration.error(msg, Calibration.BAD, e.getMessage()));
+        }
     }
 
     /** The receiver's touch screen, keyboards, mice and gamepads for the sender (PROTOCOL.md 4i). */
@@ -811,7 +851,8 @@ final class MirrorSession {
         // pts + D instead of at once. The loop then also wakes every 2 ms to keep the track filled on time.
         AudioPlayout playout = null;
         int target = 0, resyncsSeen = 0;
-        long lastDecodeNs = 0;
+        long lastDecodeNs = 0, lastDelayUs = 0;
+        Probing probing = null;
         // What the scheduled playout needs of each packet in the decoder, {seq, pts, D, arrival}, in order: an Opus
         // decoder gives one output per input, in order (its own output pts are shifted by the pre-skip).
         java.util.ArrayDeque<long[]> pending = new java.util.ArrayDeque<>();
@@ -834,7 +875,13 @@ final class MirrorSession {
                         sync.tick(us);
                         long offsetNs = Math.round(sync.offsetMs * 1e6);
                         SyncSession ss = sync;
+                        Probing asked = probeAsked.getAndSet(null);
+                        if (asked != null) {
+                            probing = startProbe(playout, asked, lastDelayUs, offsetNs, probing);
+                        }
                         playout.fill(out, arrived, target, x -> ss.toLocal(x) * 1000 + offsetNs, sync.skew());
+                        if (probing != null) probing = probeProgress(playout, out, probing, arrived);
+                        soundScheduled = playout.aligned() && out.ready();
                         sync.setPlaying(playout.aligned());
                         if (playout.aligned()) sync.presented(true, playout.lastErrorNs() / 1e6);
                         audioResyncs = playout.hardResyncs();
@@ -856,6 +903,7 @@ final class MirrorSession {
                 long seq = h.getInt(8) & 0xffffffffL;
                 int len = Math.min(h.getInt(16), n - HEADER);
                 long delay = Wire.delayUs(buf);
+                if (delay > 0) lastDelayUs = delay;
                 int pts32 = h.getInt(12);
                 if (len <= 0) continue;
                 if (audioCrypt != null) {
@@ -982,6 +1030,9 @@ final class MirrorSession {
         } finally {
             activeTrack = null;
             audioOut = null;
+            soundScheduled = false;
+            Probing left = probing != null ? probing : probeAsked.getAndSet(null);
+            if (left != null) control.send(Calibration.error(left.msg, Calibration.NOT_PLAYING, "the session ended"));
             if (playout != null) {
                 Log.i(LuchService.TAG, "audio playout: " + playout.hardResyncs() + " resyncs, " + playout.concealed()
                         + " concealed, " + playout.dropped() + " dropped, " + playout.repeated() + " repeated");
@@ -995,6 +1046,39 @@ final class MirrorSession {
                 dec.release();
             }
         }
+    }
+
+    /** Hands a probe to the playout (one before it is dropped); null when it is too late to place. */
+    private Probing startProbe(AudioPlayout playout, Probing p, long delayUs, long offsetNs, Probing before) {
+        if (before != null) {
+            control.send(Calibration.error(before.msg, Calibration.NOT_PLAYING, "replaced by another probe"));
+        }
+        if (!playout.probe(p.play)) {
+            playout.probe(null);
+            control.send(Calibration.error(p.msg, Calibration.LATE, "its pts was already played"));
+            return null;
+        }
+        long lastEndUs = p.play.lastPtsUs() + delayUs + (long) p.play.length() * 1_000_000L / audioRate;
+        p.deadlineNs = sync.toLocal(lastEndUs) * 1000 + offsetNs + 3_000_000_000L;
+        return p;
+    }
+
+    /** Answers a probe once its last sweep has been heard, or gives it up past its time; the probe still on, or null. */
+    private Probing probeProgress(AudioPlayout playout, AudioOut out, Probing p, long nowNs) {
+        if (p.play.done(nowNs)) {
+            long[] heard = p.play.heardNs();
+            long[] played = new long[heard.length];
+            for (int i = 0; i < heard.length; i++) played[i] = sync.toSender(Math.round(heard[i] / 1000.0));
+            control.send(Calibration.done(p.msg.optString("id"), played, out.clock.source()));
+            Log.i(LuchService.TAG, "calibration played, src " + out.clock.source());
+            return null;
+        }
+        if (nowNs > p.deadlineNs) {
+            playout.probe(null);
+            control.send(Calibration.error(p.msg, Calibration.NOT_PLAYING, "the sound stopped before the sweeps"));
+            return null;
+        }
+        return p;
     }
 
     private MediaCodec opusDecoder(byte[] opusHead) throws IOException {

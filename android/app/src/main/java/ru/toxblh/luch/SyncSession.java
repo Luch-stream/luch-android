@@ -56,9 +56,9 @@ final class SyncSession {
         return g == null ? null : new SyncSession(g);
     }
 
-    /** What the welcome says this receiver can do (PROTOCOL.md 4h). */
-    static JSONObject capabilities(boolean probe) throws JSONException {
-        return new JSONObject().put("v", 1).put("clock", true).put("probe", probe).put("mic", false);
+    /** What the welcome says this receiver can do (PROTOCOL.md 4k): it plays a calibration's sweeps, it does not listen. */
+    static JSONObject capabilities() throws JSONException {
+        return new JSONObject().put("v", 1).put("clock", true).put("probe", true).put("mic", false);
     }
 
     boolean wantsAudio() {
@@ -123,6 +123,11 @@ final class SyncSession {
     /** Local µs at which the sender's clock reads {@code senderUs}. */
     synchronized long toLocal(long senderUs) {
         return est.toLocal(senderUs);
+    }
+
+    /** The sender's µs at local µs {@code localUs}. */
+    synchronized long toSender(long localUs) {
+        return est.toSender(localUs);
     }
 
     /** The full pts of a packet's low 32 bits. */
