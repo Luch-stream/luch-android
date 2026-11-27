@@ -9,6 +9,10 @@ sides together.
 - `android/app/src/main/java/ru/toxblh/luch/`: the receiver, plain Java, no dependencies in the APK.
   - `LuchService`: the always-on service; `ControlServer`: the TCP control port 47800.
   - `MirrorSession`: one session (UDP video and audio, decoding); `MirrorActivity`: its screen.
+  - Input to the sender (PROTOCOL.md 4h): `InputLink` (the grant, the sending thread), `InputWire` (the state and
+    its datagrams), `KeyMap` (Android key codes as evdev codes, gamepad bits), `Touchpad` (touchpad gestures); the
+    last three are plain Java with JVM tests. `MirrorActivity` feeds them: a remote's keys stay on the receiver, only
+    keyboards with letters, mice, devices with sticks and the touch screen go to the sender.
   - `LowLatencyDecoder`: decoder setup; `Bench` and `Caps`: what the TV can do, sent in the welcome.
   - `Reports`: crash and error reports kept on the TV and handed to a sender that asks (PROTOCOL.md, section 6).
     No server and no logs; keep addresses and names out of anything added to a report.

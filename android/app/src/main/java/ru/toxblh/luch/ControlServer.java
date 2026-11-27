@@ -103,6 +103,7 @@ final class ControlServer {
         String peerId = null;
         String peerName = null;
         String peerApp = "";
+        boolean peerInput = false;
         String address = s.getInetAddress().getHostAddress();
         MirrorSession.Control control = null;
         try {
@@ -145,6 +146,7 @@ final class ControlServer {
                         peerId = msg.optString("id", address);
                         peerName = msg.optString("name", address);
                         peerApp = msg.optString("app");
+                        peerInput = wants(msg, "input");
                         send(out, welcome());
                         SENDERS.add(control);
                         if (wants(msg, "reports")) {
@@ -171,6 +173,12 @@ final class ControlServer {
                         // The sender's answer to something of ours; answering it would only bounce errors back.
                         Log.i(LuchService.TAG, "sender says: " + msg);
                         break;
+                    case "input": {
+                        // The grant for this sender's session (4h); another sender's has no say over it.
+                        MirrorSession m = MirrorSession.current;
+                        if (m != null && m.control == control) m.input.onGrant(msg);
+                        break;
+                    }
                     case "sender_stats": {
                         MirrorSession m = MirrorSession.current;
                         if (m != null && m.control == control) m.onSenderStats(msg);
@@ -193,7 +201,7 @@ final class ControlServer {
                             break;
                         }
                         try {
-                            msg.put("_app", peerApp);
+                            msg.put("_app", peerApp).put("_input", peerInput).put("_name", peerName);
                             int[] ports = MirrorSession.start(context, control, msg);
                             send(out, new JSONObject().put("t", "ready")
                                     .put("video_port", ports[0]).put("audio_port", ports[1]));
@@ -406,6 +414,9 @@ final class ControlServer {
                 .put("limits", Caps.limits())
                 // What the hardware says it can do, and what it measured (null until the bench has run).
                 .put("hw", Caps.collect(context))
+                // What could control the sender from here (4h).
+                .put("input", Caps.input(context))
+                .put("touch_points", Caps.touchPoints(context))
                 .put("bench", Bench.cached(context) == null ? JSONObject.NULL : Bench.cached(context));
     }
 

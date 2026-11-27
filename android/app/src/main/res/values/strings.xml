@@ -125,4 +125,10 @@
     <string name="share_photo_label">Luch: photos only</string>
     <string name="sound_android10">Android 10 or newer</string>
     <string name="hot_badge">🔥 hot — lower the quality</string>
+    <string name="input_asking">Asking %s for control…</string>
+    <string name="input_granted">%s: control allowed. Three fingers bring up the panel</string>
+    <string name="input_denied">%s did not allow control</string>
+    <string name="input_off">%s took control back</string>
+    <string name="touch_direct">Touch: direct</string>
+    <string name="touch_pad">Touch: touchpad</string>
 </resources>

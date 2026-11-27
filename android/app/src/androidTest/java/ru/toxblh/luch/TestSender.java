@@ -148,12 +148,19 @@ final class TestSender {
 
     /** The bench clip of {@link #codec} (one access unit per AUD), looped at 30 fps for {@code ms}. */
     void stream(int port, long ms) throws Exception {
+        try (DatagramSocket udp = new DatagramSocket()) {
+            stream(udp, port, ms);
+        }
+    }
+
+    /** As {@link #stream(int, long)}, from {@code udp}: the socket the receiver's input comes back to (PROTOCOL.md 4h). */
+    void stream(DatagramSocket udp, int port, long ms) throws Exception {
         boolean hevc = codec.equals("video/hevc");
         List<byte[]> frames = accessUnits(readAsset(hevc ? "bench/hevc.h265" : "bench/avc.h264"), hevc);
-        try (DatagramSocket udp = new DatagramSocket()) {
+        {
             InetAddress to = InetAddress.getLoopbackAddress();
             long until = SystemClock.uptimeMillis() + ms;
-            for (int i = 0; SystemClock.uptimeMillis() < until; i++) {
+            for (int i = 0; SystemClock.uptimeMillis() < until && !udp.isClosed(); i++) {
                 byte[] f = frames.get(i % frames.size());
                 boolean idr = hevc ? hasNal(f, 19, true) || hasNal(f, 20, true) : hasNal(f, 5, false);
                 boolean config = hasNal(f, hevc ? 32 : 7, hevc);   // VPS / SPS

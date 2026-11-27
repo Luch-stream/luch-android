@@ -25,6 +25,34 @@ final class Caps {
     private Caps() {
     }
 
+    /**
+     * What could drive a sender from here (PROTOCOL.md 4h): the touch screen and a stylus when there are any; keyboards,
+     * mice and gamepads always, as one can be plugged in at any time.
+     */
+    static JSONArray input(Context context) {
+        JSONArray a = new JSONArray();
+        android.content.pm.PackageManager pm = context.getPackageManager();
+        if (pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN)) a.put("touch");
+        boolean stylus = false;
+        for (int id : android.view.InputDevice.getDeviceIds()) {
+            android.view.InputDevice d = android.view.InputDevice.getDevice(id);
+            if (d != null && (d.getSources() & android.view.InputDevice.SOURCE_STYLUS) == android.view.InputDevice.SOURCE_STYLUS) {
+                stylus = true;
+            }
+        }
+        if (stylus) a.put("stylus");
+        return a.put("keyboard").put("mouse").put("gamepad");
+    }
+
+    /** How many fingers the touch screen tells apart: 0 without one. */
+    static int touchPoints(Context context) {
+        android.content.pm.PackageManager pm = context.getPackageManager();
+        if (pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_JAZZHAND)) return 10;
+        if (pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN_MULTITOUCH_DISTINCT)) return 2;
+        if (pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN)) return 1;
+        return 0;
+    }
+
     static JSONObject collect(Context context) {
         JSONObject out = new JSONObject();
         try {
