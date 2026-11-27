@@ -987,17 +987,33 @@ public class StatusActivity extends Activity {
     private String networkKind() {
         if (Build.VERSION.SDK_INT < 23) return "";
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
-        NetworkCapabilities caps = cm == null ? null : cm.getNetworkCapabilities(cm.getActiveNetwork());
+        NetworkCapabilities caps = cm == null ? null : cm.getNetworkCapabilities(lan(cm));
         if (caps == null) return "";
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return "Wi‑Fi, ";
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) return "Ethernet, ";
         return "";
     }
 
+    /**
+     * The Wi‑Fi or Ethernet network senders reach us on. Not the active one: with a VPN on, that is the tunnel, and its
+     * address is not where anyone on the LAN can find us.
+     */
+    static android.net.Network lan(ConnectivityManager cm) {
+        for (android.net.Network n : cm.getAllNetworks()) {
+            NetworkCapabilities c = cm.getNetworkCapabilities(n);
+            if (c != null && !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    && (c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                    || c.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+                return n;
+            }
+        }
+        return cm.getActiveNetwork();
+    }
+
     private String address() {
         if (Build.VERSION.SDK_INT < 23) return Compat.ipv4();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
-        LinkProperties lp = cm.getLinkProperties(cm.getActiveNetwork());
+        LinkProperties lp = cm.getLinkProperties(lan(cm));
         if (lp != null) {
             for (LinkAddress a : lp.getLinkAddresses()) {
                 if (a.getAddress() instanceof Inet4Address) return a.getAddress().getHostAddress();

@@ -62,11 +62,16 @@ final class Compat {
         }
     }
 
-    /** The first IPv4 address on a non-loopback interface (ConnectivityManager.getActiveNetwork is Android 6). */
+    /** A VPN's or the mobile network's interface: not where senders on the LAN find us. */
+    static boolean tunnel(String name) {
+        return name != null && name.matches("(tun|tap|ppp|wg|ipsec|rmnet|ccmni|clat).*");
+    }
+
+    /** The first IPv4 address on a LAN interface (ConnectivityManager.getActiveNetwork is Android 6). */
     static String ipv4() {
         try {
             for (NetworkInterface i : Collections.list(NetworkInterface.getNetworkInterfaces())) {
-                if (!i.isUp() || i.isLoopback()) continue;
+                if (!i.isUp() || i.isLoopback() || tunnel(i.getName())) continue;
                 for (InetAddress a : Collections.list(i.getInetAddresses())) {
                     if (a instanceof Inet4Address) return a.getHostAddress();
                 }
