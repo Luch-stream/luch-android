@@ -81,9 +81,12 @@ final class AudioOut {
 
     /** When the next frame written will be heard (local ns); before the clock knows, a guess from the buffer. */
     long hearNs(long nowNs) {
-        if (clock.valid()) return clock.hearNs(written);
-        long buffered = playing ? written - head() : written;
-        return nowNs + Math.round(buffered * 1e9 / clock.rate()) + AudioClock.HEAD_GUESS_NS;
+        return clock.hearNs(written, buffered(), nowNs);
+    }
+
+    /** Frames written and not yet taken by the mixer. */
+    int buffered() {
+        return (int) Math.max(0, playing ? written - head() : written);
     }
 
     /** Where the sound goes, as the protocol names it ("builtin", "hdmi", "hdmi_arc", "bluetooth", "usb", "other"). */

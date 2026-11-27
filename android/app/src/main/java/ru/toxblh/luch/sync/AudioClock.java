@@ -23,6 +23,7 @@ public final class AudioClock {
     private static final long FIT_SPAN_NS = 1_000_000_000L;
     private static final double MAX_PPM = 1000;
     private static final int POINTS = 16;
+    private static final long JUMP_NS = 1_000_000L;
 
     private final int rate;
     private final double nominalNsPerFrame;
@@ -34,7 +35,7 @@ public final class AudioClock {
     private long firstPollNs = -1, lastPollNs;
     private double nsPerFrame;
     private long anchorF, anchorT;
-    private int polls;
+    private int polls, jumps;
 
     public AudioClock(int rate) {
         this.rate = rate;
@@ -106,6 +107,15 @@ public final class AudioClock {
     }
 
     private void addPoint(long f, long t) {
+        // A point off the line by more than a millisecond: the track ran dry, was paused or rerouted, and its
+        // position jumped. What was fitted before no longer holds.
+        if (n > 0 && Math.abs(t - hearNs(f)) > JUMP_NS) {
+            n = 0;
+            next = 0;
+            nsPerFrame = nominalNsPerFrame;
+            polls = 0;
+            jumps++;
+        }
         fs[next] = f;
         ts[next] = t;
         next = (next + 1) % POINTS;
@@ -145,6 +155,15 @@ public final class AudioClock {
         return anchorT + Math.round((framesWritten - anchorF) * nsPerFrame);
     }
 
+    /**
+     * When frame number {@code framesWritten} will be heard, with {@code buffered} frames not yet played: from the
+     * clock once it is known, before that a guess from the buffer.
+     */
+    public long hearNs(long framesWritten, long buffered, long nowNs) {
+        if (valid()) return hearNs(framesWritten);
+        return nowNs + Math.round(buffered * 1e9 / rate) + HEAD_GUESS_NS;
+    }
+
     /** Local time at which a frame written now will be heard, minus now: the track's whole output latency. */
     public long latencyNs(long framesWritten, long nowNs) {
         return hearNs(framesWritten) - nowNs;
@@ -153,6 +172,11 @@ public final class AudioClock {
     /** Frames the DAC plays per local second (the r of docs: sync, 6.4). */
     public double framesPerSecond() {
         return 1e9 / nsPerFrame;
+    }
+
+    /** How often the track's position jumped against its own line (underruns, pauses, route changes). */
+    public int jumps() {
+        return jumps;
     }
 
     public int rate() {
