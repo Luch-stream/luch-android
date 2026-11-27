@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -16,6 +17,13 @@
     <!-- Lets the always-on service bring up the picture when a sender starts; granted with
          "adb shell appops set ru.toxblh.luch SYSTEM_ALERT_WINDOW allow" (Android TV has no settings page for it). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Being found over Bluetooth LE where mDNS does not get through (PROTOCOL.md 1c): this TV's card on the air,
+         and on Android 12+ senders looking for one. Never used to locate anyone. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
 
     <!-- The settings pages SleepService.openSettings looks for (Android 11+ hides them otherwise). -->
     <queries>
@@ -36,6 +44,7 @@
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <application
         android:enableOnBackInvokedCallback="true"

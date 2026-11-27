@@ -228,11 +228,24 @@ final class ControlServer {
                 switch (t) {
                     case "hello": {
                         if (peerId != null) break;   // one hello per connection
+                        // A probe is discovery asking who is here (PROTOCOL.md 1b): it gets the welcome and goes, and
+                        // the TV says nothing about it. A pairing token from the QR code or the sound is checked
+                        // either way, and used up by a real hello only (1e).
+                        boolean probe = msg.optBoolean("probe");
+                        String token = Card.Pairing.check(msg.optString("token", null), probe);
+                        if (probe) {
+                            JSONObject w = welcome(secure).put("probe", true);
+                            if (token != null) w.put("token", token);
+                            send(out, w);
+                            break;
+                        }
                         peerId = msg.optString("id", address);
                         peerName = msg.optString("name", address);
                         peerApp = msg.optString("app");
                         if (secure && !admit(s, in, out, fp, peerId, peerName, address)) return;
-                        send(out, welcome(secure));
+                        JSONObject w = welcome(secure);
+                        if (token != null) w.put("token", token);
+                        send(out, w);
                         MirrorSession.Control ctl = control;
                         Luch.Peer peer = new Luch.Peer(peerId, peerName, address);
                         Runnable letIn = () -> {
@@ -251,12 +264,15 @@ final class ControlServer {
                                     send(out, new JSONObject().put("t", "reports").put("items", reports));
                                 }
                             }
+                        } else if (token != null) {
+                            // The code from this TV's screen or speaker: someone in the room, as good as an Allow.
+                            letIn.run();
                         } else {
                             // An older sender: the welcome as before, then the person decides on the TV.
                             askOld(s, out, peerName, address, letIn, asking);
                         }
                         Log.i(LuchService.TAG, "hello from " + peerName + " " + address + " app=" + msg.optString("app")
-                                + (secure ? " (TLS)" : " (plain)"));
+                                + (secure ? " (TLS)" : " (plain)") + (token == null ? "" : " token=" + token));
                         break;
                     }
                     case "ping":

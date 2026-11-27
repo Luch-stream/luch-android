@@ -137,4 +137,7 @@
     <string name="toast_paired">Luch: %s сопряжён</string>
     <string name="setting_guest">Гостевой режим: забывать компьютеры при выключении</string>
     <string name="setting_paired">Забыть сопряжённые компьютеры (%d)</string>
+    <string name="action_say_address">Сказать адрес звуком</string>
+    <string name="sender_looking">Компьютер рядом ищет телевизор: этот теперь виден ему по Bluetooth.</string>
+    <string name="status_no_address">Сетевого адреса пока нет</string>
 </resources>

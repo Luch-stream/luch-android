@@ -64,6 +64,8 @@ public class LuchService extends Service {
         watchStandby();
         browseSenders();
         browseReceivers();
+        // Where mDNS does not get through: the card over Bluetooth LE too, when the TV has it (PROTOCOL.md 1c).
+        Nearby.start(this);
         // After install or a firmware update there is no measurement yet: take it once things have settled.
         main.postDelayed(() -> Bench.autoRun(this, ControlServer::broadcastBench), 20_000);
         Updater.schedule(this, main);   // only in the GitHub build
@@ -100,6 +102,7 @@ public class LuchService extends Service {
         }
         if (server != null) server.stop();
         if (standby != null) unregisterReceiver(standby);
+        Nearby.stop();
         DeviceState.detach(this);
         super.onDestroy();
     }

@@ -5,7 +5,25 @@ Luch pushes a screen, a window, a video or photos from a computer (the *sender*)
 finds and starts a session. v0 is discovery and the control channel in plain TCP; v1 is the same channel over TLS,
 with pairing (section 3a) and sealed media (section 4). How it is kept safe, and why so, is in section 8.
 
-## 1. Discovery (mDNS / DNS-SD)
+## 1. Discovery
+
+A sender finds receivers by itself, whatever the network: a ladder it climbs while nothing is found, each rung
+saying what it tries. Everything found any way is checked with the real `hello` (section 3) before it is listed,
+and joins the same list. A sender never sends anything through a VPN interface to find a receiver (section 2).
+
+| Rung | Starts | Needs | Typical time to a receiver |
+|---|---|---|---|
+| 1a mDNS | at once | multicast on the LAN | < 1 s |
+| 1b sweep of the subnet | at once, with 1a | unicast between devices | 0.1–2 s on a /24 |
+| 1c Bluetooth LE | after 4 s with nothing (or when 1a and 1b both ended) | both in Bluetooth range, then unicast | 1–3 s |
+| 1d sound | only when the person asks, after 1c | the TV's speaker and the sender's microphone in one room | 2 s per frame |
+| 1e QR code | only when the person asks, with 1d | the sender's camera facing the TV | < 1 s once in view |
+
+Sound and the camera need the person (the TV speaks when asked, the code is held up), and open the microphone and
+the camera: a sender climbs to them only when its person asked it to look harder. luchd: `Find("all")`,
+`luchctl find`, "Search harder" in GNOME; `Refresh` climbs 1a–1c by itself (docs/dbus.md).
+
+### 1a. mDNS / DNS-SD
 
 | Who | Service type | Port | TXT |
 |---|---|---|---|
@@ -17,6 +35,103 @@ with pairing (section 3a) and sealed media (section 4). How it is kept safe, and
 - `v` stays `0`: it is the plain port's version, which every sender speaks (older senders skip any other `v`). `tls`
   says that the receiver also speaks v1 there. Nothing in a TXT record is trusted: a sender that paired with a
   receiver id trusts only that receiver's certificate under it (section 3a), whatever mDNS says.
+
+### 1b. Sweep of the subnet
+
+For networks that drop multicast (hotel and guest Wi-Fi, some mesh systems), a receiver is still a TCP port. The
+sender connects to port 47800 of every address of each LAN interface's subnet and says a probe hello where a
+connection is accepted:
+
+```
+sender   → {"t":"hello","v":0,"id":"<uuid>","name":"<host>","app":"luchd/0.4","want":[],"probe":true}
+receiver → {"t":"welcome",...,"probe":true}     the usual welcome
+sender   → {"t":"bye"}
+```
+
+- A receiver answers a probe like any hello but keeps no session, shows nothing and runs no bench.
+- Interfaces: up, running, not loopback and not point-to-point (tun, wg, ppp), nor by name a tunnel or a local
+  bridge (`tap`, `tailscale`, `zt`, `docker`, `veth`, `virbr`...). Sockets are bound to the interface (section 2).
+- Addresses: the whole subnet, but at most a /22 (1024 addresses) around the sender's own (a hotel's /16 is cut to
+  where a DHCP server handing out addresses in order most likely put the TV too); neighbours the kernel already
+  knows (its ARP table) first, then nearest to the sender's own address first.
+- Bounds: 128 connections in flight, 400 ms to connect, 2 s for the welcome, 20 s in all. A /24 with no host on most
+  addresses takes about 1 s.
+- A receiver found this way (or by 1c–1e) leaves the list when it stops answering at a later climb; mDNS has its
+  own removal.
+
+### 1c. Bluetooth LE
+
+The receiver advertises its **card** (below) as manufacturer data, company id `0xFFFF` (the id the Bluetooth SIG
+keeps for tests and for projects without one; the card's `Lu` magic tells it apart). Non-connectable, no name, no
+pairing token: flags (3 bytes) + manufacturer data (4 + 13) = 20 of the 31 bytes of a legacy advertisement, so it
+works on every controller from Bluetooth 4.0. Once a second normally, ten times a second for 2 minutes after it
+heard a sender looking.
+
+The sender scans (BlueZ: `SetDiscoveryFilter` with `Transport=le`, `DuplicateData=true`; `StartDiscovery` for
+12 s) and connects to each card's address and port as in 1b. Receivers heard are listed nearest first (strongest
+RSSI). While it scans it advertises a "looking" card (kind 2: magic, kind, its id), non-connectable; a receiver
+that hears one may tell its person ("A computer nearby is looking for a TV").
+
+Android: advertising needs `BLUETOOTH_ADVERTISE` (a runtime permission, "Nearby devices", Android 12+) or
+`BLUETOOTH`/`BLUETOOTH_ADMIN` (install time, before 12), Bluetooth on, and a controller with LE advertising
+(`getBluetoothLeAdvertiser() != null`; many TVs before Android 8 have none). Listening for senders needs
+`BLUETOOTH_SCAN` with `neverForLocation`, so only on Android 12+: before it, a scan needs the location permission,
+which a TV app should not ask for. Without any of these the receiver goes on without Bluetooth.
+
+### 1d. Sound
+
+On its person's request ("Say the address by sound" on the TV) the receiver plays its card with the pairing token,
+three times, 0.4 s apart. A sender listens on its microphone.
+
+- 16-tone FSK, like ggwave: one tone of 16 per 40 ms symbol (4 bits), tone k at `base + 100·k` Hz, `base` = 17000 Hz
+  (near-ultrasonic: 17.0–18.5 kHz, hardly heard by adults, carried by TV speakers and laptop microphones) or
+  1800 Hz (an audible fallback for speakers that cut the top; senders listen for both). Every tone fades in and out
+  over 2 ms, so symbol changes do not click. Peak at half full scale, at the TV's volume.
+- A frame: the preamble (tones `0 15 3 12 6 9 1 14`, all different so that a window a symbol off matches nothing),
+  then a Reed-Solomon codeword of `[len, payload...]` over GF(256) (polynomial 0x11d, first root α⁰, 8 parity bytes:
+  4 wrong bytes are mended), each byte as two symbols, high nibble first. Payload at most 32 bytes.
+- Receiving: Goertzel energies of the 16 tones over the middle three quarters of each symbol (Hann window); the
+  preamble is searched on an eighth of a symbol and refined to 16 samples; each symbol's timing may move by 1/64 of a
+  symbol to follow a sample clock that runs fast or slow; the length is the one whose codeword corrects and agrees.
+- Proven in memory only (both sides' tests): 40 dB down with noise as loud as the signal, sample clocks 500 ppm apart
+  (a cheap crystal is within 100), a 120 ms clap over three symbols, a steady whistle on a tone, 44.1 kHz output
+  resampled to 48 kHz. Test vector: the card `4c75013f0c2a8ec0a80114bab80badf00d` is the tones
+  `0f3c691e114c75013f0c2a8ec0a80114bab80badf00d1f8320c0e4ed937c`; `rs("Luch")` = `4c7563681c7c9b839d89732d`.
+
+### 1e. QR code and the pairing token
+
+The receiver's screen shows a QR code (byte mode, error correction H):
+`luch://connect?host=<IPv4>&port=<port>&t=<token>`. A phone with Luch opens it; a computer reads it through its
+camera, or a person passes it as text (luchd `AddReceiver`). Unknown parameters are ignored; `id=<8 hex>` may be
+given and is then checked against the welcome.
+
+The **token** is 8 hex digits, random, kept in the receiver's memory only, shown in the QR code and said by sound,
+never put on the air or the network by the receiver. A sender that has it puts it in its hello:
+
+```
+sender   → {"t":"hello",...,"token":"0badf00d"}
+receiver → {"t":"welcome",...,"token":"ok"|"bad"}          no "token" when the hello had none
+```
+
+`ok` proves the sender saw this TV's screen or heard it: it is the right TV, not one at the same address. A probe
+does not use the token up; a real hello does, and the receiver shows a new one. On the plain port a valid token
+lets the sender in without the Allow on the TV (section 3a): it was in the room. Pairing over TLS still asks for its
+code, whose rounds keep a man in the middle out; the token, said aloud and shown to everyone, does not.
+
+### 1f. The card
+
+What a receiver says about itself where there is no room for JSON (1c, 1d), big-endian:
+
+| Bytes | Field |
+|---|---|
+| 0..2 | `Lu` (0x4c 0x75) |
+| 2 | `v << 4 \| kind`: protocol version (0); kind 1 = a receiver, 2 = a sender looking |
+| 3..7 | the first 4 bytes of the id (its first 8 hex digits, dashes left out) |
+| 7..11 | IPv4 (receiver only) |
+| 11..13 | control port (receiver only) |
+| 13..17 | pairing token (sound only) |
+
+A card of another version, kind or magic is ignored; a receiver's card without an address too.
 
 ## 2. Networks with a VPN (must work without any setting)
 
@@ -51,6 +166,7 @@ either   → {"t":"bye"}                     then close
   pairing of section 3a, and the `welcome` after it. On the plain port the `welcome` (`"v":0`, with `"tls_port"`)
   comes at once, but until the person allows that connection on the TV everything but `hello`, `ping`, `pong`,
   `bye` and `error` is answered `{"t":"error","code":"not_allowed","for":"<t>","detail":"..."}` (section 3a).
+- `"probe":true` in a hello: discovery asking who is there (section 1b); the receiver answers and keeps nothing.
 
 ## 3a. Pairing (v1)
 
