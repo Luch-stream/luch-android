@@ -835,14 +835,17 @@ outcomes. The receiver lists `"logs"` in `modes` (welcome) and hands its log to 
 
 ```
 sender   → {"t":"logs","max_kb":1024}                  the last max_kb of the log (default 1024, at most 2048)
-receiver → {"t":"logs","part":i,"parts":n,"gz":"<base64>"}     i = 0..n-1, n ≥ 1, in order
+receiver → {"t":"logs","part":i,"parts":n,"gz":"<base64>"}     part counts from 0: i = 0..n-1, n ≥ 1, in order
         or {"t":"error","code":"not_allowed","for":"logs"}
 ```
 
 The gzip of the log's text (whole lines, oldest first) is cut into slices of 36 KiB, so each `gz` is at most 48 KiB of
 base64 and every line fits the 64 KiB limit; the sender decodes each `gz`, joins the bytes in `part` order and gunzips.
 An empty log is one part. Only a sender that is let in gets it, the same rule as for a session: paired over TLS, or
-allowed on the TV for this connection (section 3a); not over Bluetooth. Nothing shows on the TV.
+allowed on the TV for this connection (section 3a); not over Bluetooth. Nothing shows on the TV: a sender making a
+report says `"want":["logs","reports"]` in its hello, and a connection that wants nothing else gets no "connected"
+toast and is not listed as connected (only an unpaired sender still goes through the pairing, so a report asks only
+receivers it has paired with).
 
 Unlike a crash report (6) the log has addresses and names in it, and is not scrubbed: the sender must see which
 address and which name a line is about to make one report out of several devices, and it hides them all in one

@@ -3,6 +3,7 @@ package ru.toxblh.luch;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.json.JSONObject;
@@ -112,5 +113,15 @@ public class LogShareTest {
         assertEquals(null, ControlServer.refused("ping", false, true));
         assertEquals("not_allowed", ControlServer.refused("start", false, false).getString("code"));
         assertEquals(null, ControlServer.refused("direct", true, true));
+    }
+
+    /** A hello for a report only: let in quietly, nothing on the TV. */
+    @Test
+    public void aReportOnlyHelloIsQuiet() throws Exception {
+        assertTrue(ControlServer.onlyReport(new JSONObject("{\"t\":\"hello\",\"want\":[\"logs\",\"reports\"]}")));
+        assertTrue(ControlServer.onlyReport(new JSONObject("{\"t\":\"hello\",\"want\":[\"logs\"]}")));
+        assertFalse(ControlServer.onlyReport(new JSONObject("{\"t\":\"hello\",\"want\":[\"mirror\",\"logs\"]}")));
+        assertFalse(ControlServer.onlyReport(new JSONObject("{\"t\":\"hello\",\"want\":[]}")));
+        assertFalse(ControlServer.onlyReport(new JSONObject("{\"t\":\"hello\"}")));
     }
 }

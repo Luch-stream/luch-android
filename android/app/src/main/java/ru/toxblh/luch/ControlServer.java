@@ -158,6 +158,20 @@ final class ControlServer {
         }
     }
 
+    /**
+     * Whether the hello wants nothing but what a problem report takes ("logs", "reports"): such a connection is not a
+     * computer coming to show something, and the TV says nothing about it (PROTOCOL.md 6a).
+     */
+    static boolean onlyReport(JSONObject hello) {
+        org.json.JSONArray want = hello.optJSONArray("want");
+        if (want == null || want.length() == 0) return false;
+        for (int i = 0; i < want.length(); i++) {
+            String w = want.optString(i);
+            if (!w.equals(LogShare.MODE) && !w.equals("reports")) return false;
+        }
+        return true;
+    }
+
     /** Whether the sender's hello lists {@code what} in its "want". */
     private static boolean wants(JSONObject hello, String what) {
         org.json.JSONArray want = hello.optJSONArray("want");
@@ -170,6 +184,8 @@ final class ControlServer {
         String peerName = null;
         String peerApp = "";
         boolean peerInput = false;
+        // A connection only for a problem report (its log, crash reports): in, but not shown as connected.
+        boolean onlyReport = false;
         // Over Bluetooth (BleLink's bridge on loopback): the device, not 127.0.0.1, is who this is and what counts.
         String ble = secure ? BleLink.via(s) : null;
         String address = ble != null ? ble : s.getInetAddress().getHostAddress();
@@ -254,6 +270,7 @@ final class ControlServer {
                         peerName = msg.optString("name", address);
                         peerApp = msg.optString("app");
                         peerInput = wants(msg, "input");
+                        onlyReport = onlyReport(msg);
                         boolean known = secure && gate(context).isPaired(Pairing.hex(fp));
                         if (secure && !admit(s, in, out, fp, peerId, peerName, address)) return;
                         freshPair = secure && !known;
@@ -262,8 +279,10 @@ final class ControlServer {
                         send(out, w);
                         MirrorSession.Control ctl = control;
                         Luch.Peer peer = new Luch.Peer(peerId, peerName, address);
+                        boolean quiet = onlyReport;
                         Runnable letIn = () -> {
                             allowed.set(true);
+                            if (quiet) return;   // no toast, no bench, not in the list: nothing on the TV
                             SENDERS.add(ctl);
                             Bench.autoRun(context, ControlServer::broadcastBench);
                             Luch.connected(peer);
@@ -545,7 +564,7 @@ final class ControlServer {
                 DocActivity.closeFrom(control);
                 MirrorActivity.setLatencyLab(control, false);
             }
-            if (peerId != null && allowed.get() && ble == null) Luch.disconnected(peerId);
+            if (peerId != null && allowed.get() && ble == null && !onlyReport) Luch.disconnected(peerId);
         }
     }
 
