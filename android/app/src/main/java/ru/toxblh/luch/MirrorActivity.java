@@ -183,7 +183,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
             h = Math.round(s.videoHeight() * k);
         }
         FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) video.getLayoutParams();
-        android.util.Log.i(LuchService.TAG, "picture " + w + "x" + h + " of " + pw + "x" + ph + ", video " + s.videoWidth() + "x"
+        Log.i(LuchService.TAG, "picture " + w + "x" + h + " of " + pw + "x" + ph + ", video " + s.videoWidth() + "x"
                 + s.videoHeight() + ", mode " + fitMode);
         if (p.width != w || p.height != h || p.leftMargin != mx || p.topMargin != my) {
             p.width = w;
@@ -291,7 +291,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     private void animateCrop(float[] to) {
-        android.util.Log.i(LuchService.TAG, "crop apply " + java.util.Arrays.toString(to));
+        Log.i(LuchService.TAG, "crop apply " + java.util.Arrays.toString(to));
         MirrorSession s = MirrorSession.current;
         if (s == null) return;
         final float[] from = cropNow.clone();
@@ -366,7 +366,7 @@ public class MirrorActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     protected void onStop() {
         Luch.removeListener(panelListener);
-        android.util.Log.i(LuchService.TAG, "mirror screen stopped, finishing=" + isFinishing());
+        Log.i(LuchService.TAG, "mirror screen stopped, finishing=" + isFinishing());
         InputLink link = link();
         InputWire held = link == null ? null : link.wire();
         if (held != null) {

@@ -3,7 +3,6 @@ package ru.toxblh.luch;
 
 import android.os.Process;
 import android.os.SystemClock;
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;

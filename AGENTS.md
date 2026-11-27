@@ -28,6 +28,9 @@ sides together.
     the layout and the QR code must stay the same as luch-linux's `luch-latency/src/pattern.rs` (`LatencyPatternTest`).
   - `Reports`: crash and error reports kept on the TV and handed to a sender that asks (PROTOCOL.md, section 6).
     No server and no logs; keep addresses and names out of anything added to a report.
+  - The log (PROTOCOL.md 6a): `Log` stands in for `android.util.Log` (the app's classes do not import Android's, so
+    their lines also reach the file; don't add that import), `LogFile` (2 × 1 MB, a writer thread, a bounded queue
+    that drops), `LogShare` (`{"t":"logs"}`, gzip in base64 parts). The plain-Java ones have JVM tests. Never log keys, tokens or passphrases: the log is handed to senders.
 - `android/app/src/androidTest/`: on-device tests; `MirrorStartTest` plays the sender over localhost.
 - `tools/testsend.py`: a test sender (ffmpeg's test pattern) for checking a receiver by hand.
 

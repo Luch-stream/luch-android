@@ -9,7 +9,6 @@ import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.os.Build;
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;

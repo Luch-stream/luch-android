@@ -13,7 +13,6 @@ import android.media.MediaFormat;
 import android.media.projection.MediaProjection;
 import android.os.Build;
 import android.os.Process;
-import android.util.Log;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;

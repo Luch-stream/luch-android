@@ -5,7 +5,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInstaller;
-import android.util.Log;
 
 /** The system installer's answer to {@link Updater#install}: brings up its question when it has one. */
 public class UpdateReceiver extends BroadcastReceiver {

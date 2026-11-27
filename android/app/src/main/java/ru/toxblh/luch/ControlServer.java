@@ -4,7 +4,6 @@ package ru.toxblh.luch;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
 import android.widget.Toast;
 
 import org.json.JSONArray;
@@ -231,15 +230,9 @@ final class ControlServer {
                     continue;
                 }
                 String t = msg.optString("t");
-                if (!allowed.get() && !FREE.contains(t)) {
-                    send(out, new JSONObject().put("t", "error").put("code", "not_allowed").put("for", t)
-                            .put("detail", "allow it on the TV first"));
-                    continue;
-                }
-                if (ble != null && !FREE.contains(t) && !Direct.MODE.equals(t)) {
-                    // Over Bluetooth only the way to the network: nothing to show, no addresses to send media to.
-                    send(out, new JSONObject().put("t", "error").put("code", "not_allowed").put("for", t)
-                            .put("detail", "over Bluetooth only direct; join the network first"));
+                JSONObject refusal = refused(t, allowed.get(), ble != null);
+                if (refusal != null) {
+                    send(out, refusal);
                     continue;
                 }
                 switch (t) {
@@ -296,7 +289,7 @@ final class ControlServer {
                             askOld(s, out, peerName, address, letIn, asking);
                         }
                         Log.i(LuchService.TAG, "hello from " + peerName + " " + address + " app=" + msg.optString("app")
-                                + (secure ? " (TLS)" : " (plain)") + (token == null ? "" : " token=" + token));
+                                + (secure ? " (TLS)" : " (plain)") + (token == null ? "" : " with a pairing token"));
                         break;
                     }
                     case "ping":
@@ -308,6 +301,15 @@ final class ControlServer {
                     case "reports_taken":
                         Reports.taken(context, msg.optJSONArray("ids"));
                         break;
+                    case LogShare.MODE: {
+                        // This device's log, to a sender let in (above) that asks; nothing shows on the TV (6a).
+                        byte[] text = Log.tail(LogShare.maxBytes(msg));
+                        java.util.List<JSONObject> parts = LogShare.parts(text);
+                        for (JSONObject part : parts) send(out, part);
+                        Log.i(LuchService.TAG, "log handed to " + peerName + ": " + text.length / 1024 + " KB in "
+                                + parts.size() + " parts");
+                        break;
+                    }
                     case "error":
                         // The sender's answer to something of ours; answering it would only bounce errors back.
                         Log.i(LuchService.TAG, "sender says: " + msg);
@@ -549,6 +551,24 @@ final class ControlServer {
 
     // ---- who may come in (PROTOCOL.md, section 3a) ----
 
+    /**
+     * The answer to a message of type {@code t} that is not let through, or null: before the connection is let in
+     * (paired over TLS, or allowed on the TV) only FREE goes; over Bluetooth only the way to the network.
+     */
+    static JSONObject refused(String t, boolean allowed, boolean overBle) throws JSONException {
+        if (FREE.contains(t)) return null;
+        if (!allowed) {
+            return new JSONObject().put("t", "error").put("code", "not_allowed").put("for", t)
+                    .put("detail", "allow it on the TV first");
+        }
+        if (overBle && !Direct.MODE.equals(t)) {
+            // Nothing to show, no addresses to send media to, no log.
+            return new JSONObject().put("t", "error").put("code", "not_allowed").put("for", t)
+                    .put("detail", "over Bluetooth only direct; join the network first");
+        }
+        return null;
+    }
+
     /** Whether something is on the screen for a sender now: then an unknown one is asked about before any code. */
     private static boolean playing() {
         return MirrorSession.current != null || MediaCast.current != null || PhotoSession.current != null
@@ -705,6 +725,8 @@ final class ControlServer {
 
     /** {"t":"pair_refused"}: why the sender is not let in, and when it may ask again. */
     private static void refuse(OutputStream out, String reason, long retryMs) throws IOException, JSONException {
+        Log.i(LuchService.TAG, "pairing refused: " + reason
+                + (retryMs > 0 ? ", retry in " + retryMs / 1000 + " s" : ""));
         JSONObject m = new JSONObject().put("t", "pair_refused").put("reason", reason);
         if (retryMs > 0) m.put("retry_s", (retryMs + 999) / 1000);
         send(out, m);
@@ -728,6 +750,7 @@ final class ControlServer {
         Gate.Verdict v = g.check(null, address);
         if (v != Gate.Verdict.PROMPT) {
             long wait = g.retryMs(null, address);
+            Log.i(LuchService.TAG, "older sender " + name + " " + address + " not asked: " + v);
             WRITER.execute(() -> {
                 try {
                     send(out, new JSONObject().put("t", "error").put("code", "not_allowed")
@@ -748,6 +771,7 @@ final class ControlServer {
             @Override
             public void allow() {
                 end();
+                Log.i(LuchService.TAG, "older sender " + name + " " + address + " allowed on the TV");
                 letIn.run();
             }
 
@@ -773,6 +797,7 @@ final class ControlServer {
             }
 
             private void refuseOld(String why) {
+                Log.i(LuchService.TAG, "older sender " + name + " " + address + ": " + why);
                 WRITER.execute(() -> {
                     try {
                         send(out, new JSONObject().put("t", "error").put("code", "not_allowed").put("detail", why));
@@ -900,7 +925,8 @@ final class ControlServer {
                 .put("decoders", new JSONArray(Luch.decoders()))
                 .put("max", Luch.maxSize())
                 .put("modes", Direct.withMode(BleWake.withMode(new JSONArray().put("mirror").put("photo").put("media")
-                        .put("audio").put("doc").put("ink").put("latency"), Nearby.unavailable(context)),
+                        .put("audio").put("doc").put("ink").put("latency").put(LogShare.MODE),
+                        Nearby.unavailable(context)),
                         DirectGroup.unavailable(context)))
                 // The TV's own apps it can open with a link (PROTOCOL.md, section 4f).
                 .put("apps", Remote.apps(context))

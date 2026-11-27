@@ -126,7 +126,7 @@ final class AudioOut implements AudioPlayout.Output {
         clock.onTimestamp(ok, ts.framePosition, ts.nanoTime, nowNs);
         if (!"timestamp".equals(clock.source())) clock.onHead(head(), nowNs);
         if (before == null && clock.source() != null) {
-            android.util.Log.i(LuchService.TAG, "audio clock: " + clock.source() + " after "
+            Log.i(LuchService.TAG, "audio clock: " + clock.source() + " after "
                     + (nowNs - startedNs) / 1_000_000 + " ms, written " + written + ", head " + head()
                     + (ok ? ", timestamp " + ts.framePosition : ", no timestamp"));
         }

@@ -18,7 +18,6 @@ import android.os.Build;
 import android.os.PowerManager;
 import android.os.Process;
 import android.os.SystemClock;
-import android.util.Log;
 import android.view.Surface;
 
 import org.json.JSONException;
@@ -1224,7 +1223,7 @@ final class MirrorSession {
     static final String SCREEN_NOT_SHOWN = "screen_not_shown";
 
     private void statsLoop() {
-        int tries = 0;
+        int tries = 0, sent = 0;
         while (!ended) {
             SystemClock.sleep(1000);
             // The system may refuse to open the screen for a while: for 5 s after Home on older Android, or without
@@ -1289,6 +1288,8 @@ final class MirrorSession {
                     s.put(key, device.get(key));
                 }
                 control.send(s);
+                // In the log every 5 s: enough to see a session drift, little enough to keep hours of them.
+                if (sent++ % 5 == 0) Log.i(LuchService.TAG, "stats " + s);
             } catch (JSONException ignored) {
             }
         }

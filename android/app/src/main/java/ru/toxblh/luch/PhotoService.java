@@ -17,7 +17,6 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.OpenableColumns;
-import android.util.Log;
 import android.widget.Toast;
 
 import org.json.JSONArray;

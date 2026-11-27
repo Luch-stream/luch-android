@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package ru.toxblh.luch;
 
-import android.util.Log;
 
 import org.json.JSONException;
 import org.json.JSONObject;

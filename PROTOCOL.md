@@ -822,7 +822,34 @@ sender   → {"t":"reports_taken","ids":["<uuid>",...]}
 
 A report holds no logs, no addresses (IPv4 and IPv6 in messages and stack traces become `<ip>`), no device name
 given by the person and no sender names. The sender decides what to do with it: luchd shows it to its user and offers
-to file it as an issue. Sending reports to a server must stay opt-in on the sender's side.
+to file it as an issue. Sending reports to a server must stay opt-in on the sender's side. The log is not part of a
+report: it comes only when a person asks for it on the sender (6a).
+
+## 6a. Logs
+
+Each device keeps a log of its own: Luch's lines only, never the system's, in at most 2 × 1 MB (Android:
+`luch.log` and `luch.log.1` in the app's files; a line is `2026-01-31 20:15:02.123+0100 I <thread>: <text>`). It
+holds what explains a problem: each session's start (the sender's `app`, codec, size, fps, then the decoder and the
+low-latency keys it took), the stats every 5 s, decoder resets and errors, audio resyncs and underruns, pairing
+outcomes. The receiver lists `"logs"` in `modes` (welcome) and hands its log to a sender that asks:
+
+```
+sender   → {"t":"logs","max_kb":1024}                  the last max_kb of the log (default 1024, at most 2048)
+receiver → {"t":"logs","part":i,"parts":n,"gz":"<base64>"}     i = 0..n-1, n ≥ 1, in order
+        or {"t":"error","code":"not_allowed","for":"logs"}
+```
+
+The gzip of the log's text (whole lines, oldest first) is cut into slices of 36 KiB, so each `gz` is at most 48 KiB of
+base64 and every line fits the 64 KiB limit; the sender decodes each `gz`, joins the bytes in `part` order and gunzips.
+An empty log is one part. Only a sender that is let in gets it, the same rule as for a session: paired over TLS, or
+allowed on the TV for this connection (section 3a); not over Bluetooth. Nothing shows on the TV.
+
+Unlike a crash report (6) the log has addresses and names in it, and is not scrubbed: the sender must see which
+address and which name a line is about to make one report out of several devices, and it hides them all in one
+pass, stable across the files, when the person ticks "Hide addresses and names" (on by default). That is safe
+because nothing asks for a log by itself: a sender asks only when a person makes a report on it ("Report a
+Problem…", `luchctl report`), and the file it writes goes nowhere until that person sends it. The receiver gives the
+log only to a sender it already lets show its screen, which can see far more than the log says.
 
 ## 7. Later versions (reserved)
 

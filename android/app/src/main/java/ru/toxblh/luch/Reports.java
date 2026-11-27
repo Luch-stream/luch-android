@@ -3,7 +3,6 @@ package ru.toxblh.luch;
 
 import android.content.Context;
 import android.os.Build;
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -43,6 +42,8 @@ final class Reports {
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
             try {
                 crash(app, t, e);
+                Log.e(LuchService.TAG, "crash in " + t.getName(), e);
+                Log.flush(500);   // the log's own thread must write it before the process goes
             } catch (Throwable ignored) {
                 // never let the report hide the crash
             }
