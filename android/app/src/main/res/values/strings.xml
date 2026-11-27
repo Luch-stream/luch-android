@@ -153,4 +153,13 @@
     <string name="touch_pad">Touch: touchpad</string>
     <string name="takeover_ask">%s wants to show something else. Stop what is on the screen and let it?</string>
     <string name="direct_ask">%s wants to connect directly (Wi-Fi Direct). The TV keeps its own Wi-Fi if it can.</string>
+    <!-- "Report a problem" (ProblemReport): one file for the person to send, nothing sent by the app. -->
+    <string name="report_problem">Report a problem</string>
+    <string name="report_message">Makes one file with this device\'s Luch log and what it runs on. Nothing is sent: you choose where the file goes.</string>
+    <string name="report_what">What happened?</string>
+    <string name="report_hide">Hide addresses and names</string>
+    <string name="report_make">Make the file</string>
+    <string name="report_subject">Luch: a problem report</string>
+    <string name="report_saved">Saved as %s</string>
+    <string name="report_failed">Could not make the report: %s</string>
 </resources>

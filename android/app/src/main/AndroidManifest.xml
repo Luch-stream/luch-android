@@ -46,6 +46,11 @@
         <intent>
             <action android:name="android.settings.ACCESSIBILITY_SETTINGS" />
         </intent>
+        <!-- Whether anything here takes a problem report (ProblemReport); else it is saved in Download/. -->
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="application/zip" />
+        </intent>
         <!-- The TV's own apps a sender may open (PROTOCOL.md 4f). -->
         <package android:name="com.google.android.youtube.tv" />
         <package android:name="com.google.android.youtube" />
@@ -239,6 +244,13 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/sleep_service" />
         </service>
+
+        <!-- A problem report handed to the app the person shares it with, read only (ProblemReport). -->
+        <provider
+            android:name=".ReportProvider"
+            android:authorities="${applicationId}.reports"
+            android:exported="false"
+            android:grantUriPermissions="true" />
 
         <receiver
             android:name=".BootReceiver"

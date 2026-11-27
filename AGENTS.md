@@ -30,7 +30,9 @@ sides together.
     No server and no logs; keep addresses and names out of anything added to a report.
   - The log (PROTOCOL.md 6a): `Log` stands in for `android.util.Log` (the app's classes do not import Android's, so
     their lines also reach the file; don't add that import), `LogFile` (2 × 1 MB, a writer thread, a bounded queue
-    that drops), `LogShare` (`{"t":"logs"}`, gzip in base64 parts). The plain-Java ones have JVM tests. Never log keys, tokens or passphrases: the log is handed to senders.
+    that drops), `LogShare` (`{"t":"logs"}`, gzip in base64 parts). `ProblemReport` is the status screen's "Report a
+    problem" (the log, `About`, kept reports; `Redact` hides addresses and names; `ReportProvider` shares the file).
+    The plain-Java ones have JVM tests. Never log keys, tokens or passphrases: the log is handed to senders.
 - `android/app/src/androidTest/`: on-device tests; `MirrorStartTest` plays the sender over localhost.
 - `tools/testsend.py`: a test sender (ffmpeg's test pattern) for checking a receiver by hand.
 

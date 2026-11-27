@@ -952,6 +952,8 @@ public class StatusActivity extends Activity {
         lp.setMargins(dp(20), 0, dp(20), 0);
         card.addView(line, lp);
         card.addView(dryRunRow());
+        card.addView(divider());
+        card.addView(reportRow());
         content.addView(card, Ui.below(this, 20));
     }
 
@@ -976,6 +978,16 @@ public class StatusActivity extends Activity {
                     : getString(R.string.calibration_refused, o.why);
             runOnUiThread(() -> t.setText(text));
         }, "luch-calibration-dry-run").start());
+        return t;
+    }
+
+    /** One file with this device's log and what it runs on, for the person to send where they like (ProblemReport). */
+    private View reportRow() {
+        TextView t = Ui.text(this, getString(R.string.report_problem), 17, Ui.TEXT, false);
+        t.setPadding(dp(20), dp(14), dp(20), dp(14));
+        t.setFocusable(true);
+        t.setClickable(true);
+        t.setOnClickListener(v -> ProblemReport.ask(this));
         return t;
     }
 

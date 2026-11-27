@@ -144,6 +144,8 @@ final class MirrorSession {
     private volatile long bytesIn;
     /** The sender's own figures, once a second ({"t":"sender_stats",...}); null until the first. */
     private volatile JSONObject senderStats;
+    /** The last session's start message and its latest stats line, for a report's about.txt (ProblemReport). */
+    static volatile String lastStart, lastStats;
 
     /** What the status screen shows while a picture is being received. */
     static final class Live {
@@ -303,6 +305,8 @@ final class MirrorSession {
         } catch (SocketException ignored) {
         }
         current = s;
+        lastStart = msg.toString();
+        lastStats = null;
         broadcast(context, true, false);
         wakeScreen(context);
         if (!s.audioOnly) thread(s::videoLoop, "luch-video");
@@ -1288,8 +1292,9 @@ final class MirrorSession {
                     s.put(key, device.get(key));
                 }
                 control.send(s);
+                lastStats = s.toString();
                 // In the log every 5 s: enough to see a session drift, little enough to keep hours of them.
-                if (sent++ % 5 == 0) Log.i(LuchService.TAG, "stats " + s);
+                if (sent++ % 5 == 0) Log.i(LuchService.TAG, "stats " + lastStats);
             } catch (JSONException ignored) {
             }
         }

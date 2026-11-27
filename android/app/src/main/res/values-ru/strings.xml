@@ -151,4 +151,13 @@
     <string name="touch_pad">Касание: тачпад</string>
     <string name="takeover_ask">%s хочет показать своё. Остановить то, что сейчас на экране, и пустить?</string>
     <string name="direct_ask">%s хочет подключиться напрямую (Wi-Fi Direct). Свой Wi-Fi телевизор по возможности сохранит.</string>
+    <!-- «Сообщить о проблеме» (ProblemReport): один файл, который человек отправит сам; приложение ничего не шлёт. -->
+    <string name="report_problem">Сообщить о проблеме</string>
+    <string name="report_message">Соберёт один файл: журнал Luch на этом устройстве и на чём оно работает. Ничего не отправляется: куда отдать файл, решаете вы.</string>
+    <string name="report_what">Что случилось?</string>
+    <string name="report_hide">Скрыть адреса и имена</string>
+    <string name="report_make">Собрать файл</string>
+    <string name="report_subject">Luch: сообщение о проблеме</string>
+    <string name="report_saved">Сохранено: %s</string>
+    <string name="report_failed">Не удалось собрать отчёт: %s</string>
 </resources>
