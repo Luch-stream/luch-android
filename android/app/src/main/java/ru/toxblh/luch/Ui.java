@@ -117,8 +117,14 @@ final class Ui {
         b.setStateListAnimator(null);
         b.setBackground(focusable(c, primary ? AMBER : Color.TRANSPARENT, primary ? 0 : OUTLINE_BUTTON));
         // On a TV the remote moves the focus: it must show which button OK presses, the filled one or not.
-        b.setOnFocusChangeListener((v, has) -> v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f)
-                .setDuration(120).start());
+        b.setOnFocusChangeListener((v, has) -> {
+            // Grown, it reaches past its row: the rows around it must not cut its ring off.
+            for (android.view.ViewParent p = v.getParent(); p instanceof android.view.ViewGroup; p = p.getParent()) {
+                ((android.view.ViewGroup) p).setClipChildren(false);
+                ((android.view.ViewGroup) p).setClipToPadding(false);
+            }
+            v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).setDuration(120).start();
+        });
         if (icon != 0) {
             android.graphics.drawable.Drawable d = c.getResources().getDrawable(icon).mutate();
             d.setColorFilter(ink, android.graphics.PorterDuff.Mode.SRC_IN);

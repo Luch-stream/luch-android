@@ -1032,7 +1032,9 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             float h = getHeight() / 3f, y = (getHeight() - h) / 2f, r = h / 2f;
             c.drawRoundRect(0, y, getWidth(), y + h, r, r, track);
             c.drawRoundRect(0, y, getWidth() * part, y + h, r, r, done);
-            c.drawCircle(Math.max(r * 2, getWidth() * part), getHeight() / 2f, getHeight() / 2f, done);
+            // The knob whole at either end: its centre no nearer an edge than its radius.
+            float knob = getHeight() / 2f;
+            c.drawCircle(Math.max(knob, Math.min(getWidth() - knob, getWidth() * part)), knob, knob, done);
         }
     }
 }
