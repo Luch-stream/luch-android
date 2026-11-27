@@ -42,7 +42,11 @@ jobs:
           LUCH_KEYSTORE_PASSWORD: ${{ secrets.LUCH_KEYSTORE_PASSWORD }}
           LUCH_KEY_ALIAS: ${{ secrets.LUCH_KEY_ALIAS }}
           LUCH_KEY_PASSWORD: ${{ secrets.LUCH_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon assembleGithubDebug assembleGithubRelease assembleFdroidRelease
+          REPORT_DSN: ${{ secrets.REPORT_DSN }}
+        # "Send to the developers" only in the github builds; the F-Droid build sends nothing, as F-Droid's own does.
+        run: |
+          ./gradlew --no-daemon assembleFdroidRelease
+          ./gradlew --no-daemon -PluchReportDsn="$REPORT_DSN" assembleGithubDebug assembleGithubRelease
 
       - name: Name the APKs
         run: |
