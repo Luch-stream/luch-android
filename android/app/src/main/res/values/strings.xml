@@ -152,4 +152,5 @@
     <string name="input_off">%s took control back</string>
     <string name="touch_direct">Touch: direct</string>
     <string name="touch_pad">Touch: touchpad</string>
+    <string name="takeover_ask">%s wants to show something else. Stop what is on the screen and let it?</string>
 </resources>

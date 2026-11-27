@@ -291,6 +291,14 @@ first and again with every video IDR.
 later frame arrives; after a loss everything is dropped until an IDR, which is asked for once a frame completes
 again, and again after about RTT + 100 ms if none comes. Of the frames decoded at once only the newest is drawn.
 
+**Who may take the screen.** A `start`, `photo`, `media` or `doc` while something is shown goes on at once when it
+comes from the computer whose show it is: the same `id` in its hello, on any of its connections (a Mac casts on
+one and mirrors on another). That computer wants something else shown, so the old show ends: a session or show on
+another of its connections gets `{"t":"stop","by":"receiver","reason":"replaced"}`. The same connection's same kind
+(another quality of a video, the screen switched within a session) replaces itself as before. From another computer
+the TV asks its person (the card of section 3a, with its own question); Allow ends what is shown, with that stop to
+its sender, and lets the new one in; Deny, Back or no answer is `{"t":"error","code":"busy","for":"<t>"}`.
+
 ## 4a. Photos
 
 A sender shows pictures full screen, one at a time, in a list the person can go through on the remote. The receiver lists
@@ -308,7 +316,8 @@ either   → {"t":"stop"}                   receiver adds "by":"receiver","reaso
   with a plain `HTTP/1.0 GET` (Android refuses cleartext through its own HTTP stack; the link is on the local network).
 - A new `photo` replaces the list. The receiver shows each picture fitted on black, rotated by its EXIF orientation,
   down-scaled to what the screen can use; left and right on the remote (or a swipe) go to the neighbour, Back leaves.
-- Not while a mirroring session is running: `{"t":"error","code":"busy","for":"photo"}`.
+- Something already on the screen (a mirroring session, photos, a video, a document): see "Who may take the screen"
+  in section 4.
 
 ## 4b. Media
 
@@ -348,7 +357,8 @@ either   → {"t":"stop"}                   receiver adds "by":"receiver","reaso
 - **On the TV.** OK or Play/Pause toggles, left/right skip 10 s (held: the target moves on, 30 s steps after a while,
   and the seek happens when the key is let go), up shows the controls, down opens the list of speeds, the menu key or a
   long OK opens speed, sound track and subtitles, Back stops. The controls hide after 3 s.
-- A new `media` replaces the one playing. Not while a mirroring session or photos are shown: `busy`. Subtitles from
+- A new `media` replaces the one playing; with anything else on the screen, see "Who may take the screen" in
+  section 4. Subtitles from
   `subs` are fetched under the same rules as the media; WebVTT, SubRip and ASS/SSA (text only) are understood.
 
 ## 4c. Sleep

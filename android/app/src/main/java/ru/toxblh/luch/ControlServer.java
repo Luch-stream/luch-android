@@ -241,6 +241,7 @@ final class ControlServer {
                             break;
                         }
                         peerId = msg.optString("id", address);
+                        if (control != null) SENDER_IDS.put(control, peerId);
                         peerName = msg.optString("name", address);
                         peerApp = msg.optString("app");
                         peerInput = wants(msg, "input");
@@ -310,70 +311,40 @@ final class ControlServer {
                         if (m != null && m.control == control) m.onSenderStats(msg);
                         break;
                     }
-                    case "start":
+                    case "start": {
                         if (Sender.active()) {
                             // This device is showing its own screen: one direction at a time.
                             send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "start"));
                             break;
                         }
-                        if ("audio".equals(msg.optString("mode")) && msg.optJSONObject("audio") == null) {
-                            send(out, new JSONObject().put("t", "error").put("code", "start_failed")
-                                    .put("detail", "mode audio needs an audio block"));
-                            break;
-                        }
-                        if (!"mirror".equals(msg.optString("mode")) && !"audio".equals(msg.optString("mode"))) {
-                            send(out, new JSONObject().put("t", "error").put("code", "start_failed")
-                                    .put("detail", "mode " + msg.optString("mode") + " not supported"));
-                            break;
-                        }
-                        try {
-                            msg.put("_app", peerApp).put("_input", peerInput).put("_name", peerName);
-                            // Over TLS the media is sealed with a key of this session, given only in the ready.
-                            byte[] key = secure ? MediaCrypt.newKey() : null;
-                            int[] ports = MirrorSession.start(context, control, msg, s.getInetAddress(), key);
-                            JSONObject ready = new JSONObject().put("t", "ready")
-                                    .put("video_port", ports[0]).put("audio_port", ports[1]);
-                            if (key != null) {
-                                ready.put("crypt", "aes-128-gcm")
-                                        .put("key", android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP));
-                            }
-                            send(out, ready);
-                            Log.i(LuchService.TAG, "mirror from " + peerName + ": " + msg);
-                        } catch (IOException | RuntimeException e) {
-                            send(out, new JSONObject().put("t", "error").put("code", "start_failed")
-                                    .put("detail", String.valueOf(e)));
-                        }
+                        final Socket sock = s;
+                        final MirrorSession.Control c = control;
+                        final boolean sec = secure;
+                        final String app = peerApp, name = peerName;
+                        final boolean input = peerInput;
+                        takeScreen(out, control, name, "start", msg,
+                                m -> startSession(sock, out, c, sec, app, input, name, m));
                         break;
-                    case "photo":
-                        if (Sender.active() || MirrorSession.current != null) {
+                    }
+                    case "photo": {
+                        if (Sender.active()) {
                             send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "photo"));
                             break;
                         }
-                        try {
-                            PhotoSession.open(context, control, address, msg);
-                            send(out, new JSONObject().put("t", "photo_ready"));
-                        } catch (IOException | RuntimeException e) {
-                            send(out, new JSONObject().put("t", "error").put("code", "photo_failed")
-                                    .put("detail", String.valueOf(e.getMessage())));
-                        }
+                        final MirrorSession.Control c = control;
+                        takeScreen(out, control, peerName, "photo", msg, m -> showPhotos(out, c, address, m));
                         break;
-                    case "media":
-                        if (Sender.active() || MirrorSession.current != null || PhotoSession.current != null) {
+                    }
+                    case "media": {
+                        if (Sender.active()) {
                             send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "media"));
                             break;
                         }
-                        try {
-                            MediaCast.open(context, control, address, msg);
-                            send(out, new JSONObject().put("t", "media_ready"));
-                            Log.i(LuchService.TAG, "media from " + peerName);
-                        } catch (MediaLink.BadLink e) {
-                            send(out, new JSONObject().put("t", "error").put("code", "bad_link").put("for", "media")
-                                    .put("detail", e.getMessage()));
-                        } catch (MediaCast.NoSource | RuntimeException e) {
-                            send(out, new JSONObject().put("t", "error").put("code", "media_failed").put("for", "media")
-                                    .put("detail", String.valueOf(e.getMessage())));
-                        }
+                        final MirrorSession.Control c = control;
+                        final String name = peerName;
+                        takeScreen(out, control, peerName, "media", msg, m -> playMedia(out, c, address, name, m));
                         break;
+                    }
                     case "media_cmd":
                         MediaCast.command(control, msg);
                         break;
@@ -409,20 +380,15 @@ final class ControlServer {
                         }
                         break;
                     }
-                    case "doc":
-                        if (Sender.active() || MirrorSession.current != null) {
+                    case "doc": {
+                        if (Sender.active()) {
                             send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", "doc"));
                             break;
                         }
-                        try {
-                            PhotoSession.closeFrom(control);
-                            MediaCast.closeFrom(control);
-                            DocActivity.open(context, control, address, msg);
-                        } catch (MediaLink.BadLink e) {
-                            send(out, new JSONObject().put("t", "error").put("code", "bad_link").put("for", "doc")
-                                    .put("detail", e.getMessage()));
-                        }
+                        final MirrorSession.Control c = control;
+                        takeScreen(out, control, peerName, "doc", msg, m -> showDoc(out, c, address, m));
                         break;
+                    }
                     case "doc_page":
                         DocActivity.turnTo(control, msg.optInt("page"));
                         break;
@@ -821,6 +787,189 @@ final class ControlServer {
             if (sb.length() > MAX_LINE) throw new IOException("line too long");
         }
         return sb.length() == 0 ? null : sb.toString();
+    }
+
+
+    /** A mirroring or sound-only session from this connection (PROTOCOL.md 4, 4d). */
+    private void startSession(Socket s, OutputStream out, MirrorSession.Control control, boolean secure, String peerApp,
+            boolean peerInput, String peerName, JSONObject msg) throws IOException, JSONException {
+        if ("audio".equals(msg.optString("mode")) && msg.optJSONObject("audio") == null) {
+            send(out, new JSONObject().put("t", "error").put("code", "start_failed")
+                    .put("detail", "mode audio needs an audio block"));
+            return;
+        }
+        if (!"mirror".equals(msg.optString("mode")) && !"audio".equals(msg.optString("mode"))) {
+            send(out, new JSONObject().put("t", "error").put("code", "start_failed")
+                    .put("detail", "mode " + msg.optString("mode") + " not supported"));
+            return;
+        }
+        try {
+            msg.put("_app", peerApp).put("_input", peerInput).put("_name", peerName);
+            // Over TLS the media is sealed with a key of this session, given only in the ready.
+            byte[] key = secure ? MediaCrypt.newKey() : null;
+            int[] ports = MirrorSession.start(context, control, msg, s.getInetAddress(), key);
+            JSONObject ready = new JSONObject().put("t", "ready")
+                    .put("video_port", ports[0]).put("audio_port", ports[1]);
+            if (key != null) {
+                ready.put("crypt", "aes-128-gcm")
+                        .put("key", android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP));
+            }
+            send(out, ready);
+            Log.i(LuchService.TAG, "mirror from " + peerName + ": " + msg);
+        } catch (IOException | RuntimeException e) {
+            send(out, new JSONObject().put("t", "error").put("code", "start_failed")
+                    .put("detail", String.valueOf(e)));
+        }
+    }
+
+    private void showPhotos(OutputStream out, MirrorSession.Control control, String address, JSONObject msg)
+            throws IOException, JSONException {
+        try {
+            PhotoSession.open(context, control, address, msg);
+            send(out, new JSONObject().put("t", "photo_ready"));
+        } catch (IOException | RuntimeException e) {
+            send(out, new JSONObject().put("t", "error").put("code", "photo_failed")
+                    .put("detail", String.valueOf(e.getMessage())));
+        }
+    }
+
+    private void playMedia(OutputStream out, MirrorSession.Control control, String address, String peerName,
+            JSONObject msg) throws IOException, JSONException {
+        try {
+            MediaCast.open(context, control, address, msg);
+            send(out, new JSONObject().put("t", "media_ready"));
+            Log.i(LuchService.TAG, "media from " + peerName);
+        } catch (MediaLink.BadLink e) {
+            send(out, new JSONObject().put("t", "error").put("code", "bad_link").put("for", "media")
+                    .put("detail", e.getMessage()));
+        } catch (MediaCast.NoSource | RuntimeException e) {
+            send(out, new JSONObject().put("t", "error").put("code", "media_failed").put("for", "media")
+                    .put("detail", String.valueOf(e.getMessage())));
+        }
+    }
+
+    private void showDoc(OutputStream out, MirrorSession.Control control, String address, JSONObject msg)
+            throws IOException, JSONException {
+        try {
+            DocActivity.open(context, control, address, msg);
+        } catch (MediaLink.BadLink e) {
+            send(out, new JSONObject().put("t", "error").put("code", "bad_link").put("for", "doc")
+                    .put("detail", e.getMessage()));
+        }
+    }
+
+    // ---- who may take the screen ----------------------------------------------------------------------------
+
+    /** The computer (its hello's id) behind each connection: one computer's mirror and cast connections are one. */
+    private static final java.util.Map<MirrorSession.Control, String> SENDER_IDS =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    interface Show {
+        void run(JSONObject msg) throws IOException, JSONException;
+    }
+
+    /** The connection whose show is on the screen (mirroring, photos, a video, a document), or null. */
+    static MirrorSession.Control onScreen() {
+        MirrorSession m = MirrorSession.current;
+        if (m != null && !m.ended()) return m.control;
+        PhotoSession p = PhotoSession.current;
+        if (p != null) return p.control;
+        MediaCast c = MediaCast.current;
+        if (c != null) return c.control;
+        DocActivity.Doc d = DocActivity.current;
+        return d == null ? null : d.control;
+    }
+
+    /** What is on the screen, by the message that started it: "start", "photo", "media", "doc" or null. */
+    static String onScreenKind() {
+        MirrorSession m = MirrorSession.current;
+        if (m != null && !m.ended()) return "start";
+        if (PhotoSession.current != null) return "photo";
+        if (MediaCast.current != null) return "media";
+        return DocActivity.current != null ? "doc" : null;
+    }
+
+    /** Whether two connections are the same computer's. */
+    static boolean sameSender(MirrorSession.Control a, MirrorSession.Control b) {
+        if (a == b) return true;
+        String x = SENDER_IDS.get(a);
+        return x != null && x.equals(SENDER_IDS.get(b));
+    }
+
+    /**
+     * A show from {@code control}: with nothing on the screen, or with this computer's own show on it, it simply goes
+     * on (the old one ends: the same person wants something else shown). Another computer's show is on: the TV asks
+     * whether to let this one take over; Deny, Back or no answer is "busy", as before.
+     */
+    private void takeScreen(OutputStream out, MirrorSession.Control control, String name, String what, JSONObject msg,
+            Show show) throws IOException, JSONException {
+        MirrorSession.Control shown = onScreen();
+        if (shown == null || sameSender(shown, control)) {
+            // The same connection's same kind of show replaces itself (another quality, a new screen mode, the next
+            // photos): that goes through as before. Anything else of this computer's ends what is shown first.
+            if (shown != null && !(shown == control && what.equals(onScreenKind()))) clearScreen();
+            show.run(msg);
+            return;
+        }
+        PairPrompt.ask(context, name, context.getString(R.string.takeover_ask, name), new PairPrompt.Answer() {
+            @Override
+            public void allow() {
+                new Thread(() -> {
+                    try {
+                        clearScreen();
+                        show.run(msg);
+                    } catch (IOException | JSONException ignored) {
+                        // the connection went while the TV was asking
+                    }
+                }, "luch-takeover").start();
+            }
+
+            @Override
+            public void deny() {
+                busy();
+            }
+
+            @Override
+            public void close() {
+                busy();
+            }
+
+            private void busy() {
+                try {
+                    send(out, new JSONObject().put("t", "error").put("code", "busy").put("for", what)
+                            .put("detail", "refused on the TV"));
+                } catch (IOException | JSONException ignored) {
+                }
+            }
+        });
+    }
+
+    /** Ends what is on the screen to make room; a show of another connection is told it was replaced. */
+    private static void clearScreen() {
+        MirrorSession m = MirrorSession.current;
+        if (m != null && !m.ended()) m.stopByReceiver("replaced");
+        PhotoSession p = PhotoSession.current;
+        if (p != null) {
+            tellReplaced(p.control);
+            PhotoSession.closeFrom(p.control);
+        }
+        MediaCast c = MediaCast.current;
+        if (c != null) {
+            tellReplaced(c.control);
+            MediaCast.closeFrom(c.control);
+        }
+        DocActivity.Doc d = DocActivity.current;
+        if (d != null) {
+            tellReplaced(d.control);
+            DocActivity.closeFrom(d.control);
+        }
+    }
+
+    private static void tellReplaced(MirrorSession.Control c) {
+        try {
+            c.send(new JSONObject().put("t", "stop").put("by", "receiver").put("reason", "replaced"));
+        } catch (JSONException ignored) {
+        }
     }
 
     private static void send(OutputStream out, JSONObject msg) throws IOException {

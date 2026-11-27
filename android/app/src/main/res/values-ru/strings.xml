@@ -150,4 +150,5 @@
     <string name="input_off">%s: управление отключено</string>
     <string name="touch_direct">Касание: прямое</string>
     <string name="touch_pad">Касание: тачпад</string>
+    <string name="takeover_ask">%s хочет показать своё. Остановить то, что сейчас на экране, и пустить?</string>
 </resources>

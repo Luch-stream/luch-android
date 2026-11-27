@@ -58,6 +58,8 @@ final class PairPrompt {
     private final Answer answer;
     private volatile String code;
     private volatile boolean answered;
+    /** A question of its own instead of the pairing text (another computer wants the screen); allow or deny only. */
+    private String question;
 
     private WindowManager wm;
     private View root;
@@ -78,6 +80,15 @@ final class PairPrompt {
     /** Shows the card; {@code code} null asks "allow?" first. Returns once it is up (any thread). */
     static PairPrompt show(Context context, String name, boolean unencrypted, String code, Answer answer) {
         PairPrompt p = new PairPrompt(context, name, unencrypted, code, answer);
+        onMain(p::attach);
+        current = p;
+        return p;
+    }
+
+    /** Asks {@code question} about {@code name} with Allow and Deny, the focus on Deny; no code follows. */
+    static PairPrompt ask(Context context, String name, String question, Answer answer) {
+        PairPrompt p = new PairPrompt(context, name, true, null, answer);
+        p.question = question;
         onMain(p::attach);
         current = p;
         return p;
@@ -195,7 +206,7 @@ final class PairPrompt {
             return;
         }
         boolean asking = code == null;
-        body.setText(context.getString(unencrypted ? R.string.pair_unencrypted
+        body.setText(question != null ? question : context.getString(unencrypted ? R.string.pair_unencrypted
                 : asking ? R.string.pair_ask : R.string.pair_type_code, name));
         digits.setVisibility(asking ? View.GONE : View.VISIBLE);
         if (!asking) digits.setText(code.substring(0, 3) + " " + code.substring(3));
@@ -253,7 +264,8 @@ final class PairPrompt {
             b = new Notification.Builder(context).setPriority(Notification.PRIORITY_HIGH);
         }
         boolean asking = code == null;
-        String text = asking ? context.getString(unencrypted ? R.string.pair_unencrypted : R.string.pair_ask, name)
+        String text = question != null ? question
+                : asking ? context.getString(unencrypted ? R.string.pair_unencrypted : R.string.pair_ask, name)
                 : context.getString(R.string.pair_type_code, name) + " " + code;
         b.setSmallIcon(R.drawable.ic_luch)
                 .setContentTitle(context.getString(R.string.pair_title, name))
