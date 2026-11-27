@@ -36,7 +36,7 @@ public final class SenderPolicy {
      */
     public double[] update(double nowS, double[] videoPtsMs, double[] needMs) {
         double need = max(needMs), video = max(videoPtsMs);
-        double tv, ta;   // the targets before smoothing
+        double ta;   // the target before smoothing
         if (mode == Mode.WATCHING) {
             ta = Double.isNaN(need) ? floorMs : Math.max(floorMs, need + 2);
             double d = smooth(nowS, da, ta, 1, 30, 10);
@@ -44,16 +44,10 @@ public final class SenderPolicy {
         } else {
             if (Double.isNaN(need)) need = 0;
             if (Double.isNaN(video)) video = 0;
-            if (need > video + toleranceMs) {
-                tv = need - toleranceMs;
-                ta = need;
-            } else {
-                tv = 0;
-                ta = Math.max(need, video);
-            }
+            ta = Math.max(need, video);
             double d = smooth(nowS, da, ta, 1, 10, 5);
-            // The picture's delay follows the sound's: it is the excess over the tolerance, or nothing.
-            dv = tv == 0 ? 0 : Math.max(0, d - toleranceMs);
+            // The picture waits only when the sound would trail it by more than the tolerance, and then for the excess.
+            dv = d > video + toleranceMs ? d - toleranceMs : 0;
             da = d;
         }
         first = false;
