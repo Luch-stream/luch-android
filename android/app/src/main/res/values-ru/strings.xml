@@ -160,4 +160,21 @@
     <string name="report_subject">Luch: сообщение о проблеме</string>
     <string name="report_saved">Сохранено: %s</string>
     <string name="report_failed">Не удалось собрать отчёт: %s</string>
+    <string name="report_send">Отправить разработчикам</string>
+    <string name="report_ready">Файл готов: %1$s, %2$s КБ.\nВ нём: %3$s.\n%4$s\n\n«Отправить разработчикам» положит его на сервер проекта (без учётной записи), или поделитесь файлом сами.</string>
+    <string name="report_hidden">Адреса и имена скрыты.</string>
+    <string name="report_kept">Адреса и имена оставлены как есть.</string>
+    <string name="report_share">Поделиться…</string>
+    <string name="report_save">Сохранить</string>
+    <string name="report_sending">Отправка…</string>
+    <string name="report_sent">Отправлено. Номер отчёта %s — назовите его, если напишете нам в чат.</string>
+    <string name="report_sent_text_only">Ушёл только текст: сам файл сервер не принял. Если попросим — пришлите и его.</string>
+    <string name="report_copy">Копировать</string>
+    <string name="report_copied">Скопировано: %s</string>
+    <string name="report_not_sent">Не отправлено: %s.\n\nФайл остался: им можно поделиться или сохранить его.</string>
+    <string name="report_why_big">файл слишком большой для сервера</string>
+    <string name="report_why_many">слишком много отчётов за последнее время, попробуйте позже</string>
+    <string name="report_why_refused">сервер отказал (%s)</string>
+    <string name="report_why_server">у сервера неполадки (%s), попробуйте позже</string>
+    <string name="report_why_network">нет связи с сервером (%s)</string>
 </resources>

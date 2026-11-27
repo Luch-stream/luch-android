@@ -106,7 +106,7 @@ final class Sender {
 
     static final class Session {
         private final Context context;
-        private final Luch.Receiver to;
+        final Luch.Receiver to;
         private final String pref;
         private final MediaProjection projection;
         private final Handler main = new Handler(Looper.getMainLooper());
@@ -114,6 +114,12 @@ final class Sender {
         volatile boolean ended;
         volatile Live live;
         volatile String error = "";
+        /** The receiver's welcome, and whether it let this connection in (it answered the start): a report asks it then. */
+        volatile JSONObject welcome;
+        volatile boolean letIn;
+        /** The "logs" and "error" lines while a report waits for the receiver's log; null otherwise. */
+        private volatile java.util.concurrent.BlockingQueue<JSONObject> logLines;
+        private final Object logLock = new Object();
 
         private Socket control;
         private OutputStream out;
@@ -230,6 +236,7 @@ final class Sender {
                 JSONObject m = new JSONObject(readLine(in));
                 if ("welcome".equals(m.optString("t"))) welcome = m;
             }
+            this.welcome = welcome;
             String mime = chooseCodec(welcome);
             int[] size = chooseSize();
             DisplayMetrics dm = metrics();
@@ -269,6 +276,7 @@ final class Sender {
             }
             Thread reader = new Thread(() -> read(in), "luch-sender-read");
             reader.start();
+            letIn = true;
             pump(peer, port, mime, size);
         }
 
@@ -415,10 +423,21 @@ final class Sender {
                         case "stop":
                             end("receiver " + m.optString("reason"));
                             return;
-                        case "error":
+                        case LogShare.MODE: {
+                            java.util.concurrent.BlockingQueue<JSONObject> q = logLines;
+                            if (q != null) q.offer(m);
+                            break;
+                        }
+                        case "error": {
+                            java.util.concurrent.BlockingQueue<JSONObject> q = logLines;
+                            if (q != null && LogShare.MODE.equals(m.optString("for"))) {
+                                q.offer(m);   // the report's, not the session's
+                                break;
+                            }
                             error = m.optString("code");
                             Log.w(TAG, "receiver says: " + m);
                             break;
+                        }
                         default:
                             break;
                     }
@@ -428,6 +447,49 @@ final class Sender {
                 return;
             }
             if (!ended) end("receiver closed");
+        }
+
+        /**
+         * The receiver's log for a problem report, over this session's connection, which it has already let in: a new
+         * one from this phone would be a plain one, asked about on the TV (PROTOCOL.md 6a).
+         */
+        String receiverLog(int maxKb) throws ReceiverLogs.Failure {
+            if (ended || !letIn) throw new ReceiverLogs.Failure("the session is not on");
+            if (!ReceiverLogs.offered(welcome)) {
+                throw new ReceiverLogs.Failure("its Luch cannot hand over its log yet (update it)");
+            }
+            // not the session's own lock: send() takes that, and the picture must not wait for a report
+            synchronized (logLock) {
+                java.util.concurrent.BlockingQueue<JSONObject> q = new java.util.concurrent.LinkedBlockingQueue<>();
+                logLines = q;
+                try {
+                    return ReceiverLogs.fetch(logChannel(q), maxKb, ReceiverLogs.TIMEOUT_MS);
+                } finally {
+                    logLines = null;
+                }
+            }
+        }
+
+        private ReceiverLogs.Channel logChannel(java.util.concurrent.BlockingQueue<JSONObject> q) {
+            return new ReceiverLogs.Channel() {
+                @Override
+                public void send(JSONObject message) throws IOException {
+                    Session.this.send(message);
+                }
+
+                @Override
+                public JSONObject next(long timeoutMs) throws IOException, InterruptedException {
+                    // the reader stops at the end of the session: no use waiting out the timeout then
+                    long until = SystemClock.elapsedRealtime() + timeoutMs;
+                    while (!ended) {
+                        long left = until - SystemClock.elapsedRealtime();
+                        if (left <= 0) return null;
+                        JSONObject m = q.poll(Math.min(left, 250), java.util.concurrent.TimeUnit.MILLISECONDS);
+                        if (m != null) return m;
+                    }
+                    throw new IOException("the session ended");
+                }
+            };
         }
 
         private void pump(InetAddress peer, int firstPort, String mime, int[] firstSize) throws Exception {

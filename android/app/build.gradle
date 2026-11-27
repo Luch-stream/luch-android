@@ -35,6 +35,10 @@ android {
         buildConfigField 'String', 'UPDATE_FEEDS', '"' + String.valueOf(project.findProperty('luchUpdateFeeds') ?:
                 'https://altlinux.space/api/v1/repos/Luch/luch-android/releases/latest|' +
                 'https://api.github.com/repos/Luch-stream/luch-android/releases/latest') + '"'
+        // "Report a problem" → "Send to the developers": the project's GlitchTip DSN, -PluchReportDsn=https://<key>@<host>/<id>.
+        // Empty (the default, and F-Droid's build): no such button, the report only goes where the person shares it.
+        buildConfigField 'String', 'REPORT_DSN', '"' + String.valueOf(project.findProperty('luchReportDsn') ?: '')
+                .replaceAll('["\\\\\\s]', '') + '"'
     }
 
     // Where the APK is published decides whether it may update itself:

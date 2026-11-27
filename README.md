@@ -85,6 +85,10 @@ cd android
 There are three builds: `github` (the APK on the Releases page, which updates itself), `fdroid` and `play` (the store
 updates them; no self-update code or permission in them).
 
+`-PluchReportDsn=https://<key>@<host>/<project>` (a GlitchTip project's DSN) adds "Send to the developers" to
+"Report a problem": the person sees what the file holds and sends it with one press, no account. Without it (the
+default, and F-Droid's build) there is no such button and Luch sends nothing anywhere.
+
 The decoder benchmark clips in `android/app/src/main/assets/bench` are made by `tools/gen_bench.sh` (ffmpeg's test
 pattern); `tools/testsend.py <tv ip>` sends a test pattern to a receiver without luch-linux.
 

@@ -854,7 +854,9 @@ because nothing asks for a log by itself: a sender asks only when a person makes
 Problem…", `luchctl report`), and the file it writes goes nowhere until that person sends it. The receiver gives the
 log only to a sender it already lets show its screen, which can see far more than the log says. A phone or a TV can
 make the same file itself: its status screen's "Report a problem" shares its own log, `about.txt` and kept crash
-reports through the share sheet (or saves it in Download/).
+reports through the share sheet (or saves it in Download/). A phone showing its screen on a receiver asks that one for
+its log with `{"t":"logs"}` over the same session's connection, already let in; it opens no new connection for a
+report, as that would be asked about on the TV.
 
 ## 7. Later versions (reserved)
 

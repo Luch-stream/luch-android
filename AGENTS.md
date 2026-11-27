@@ -32,7 +32,11 @@ sides together.
     their lines also reach the file; don't add that import), `LogFile` (2 × 1 MB, a writer thread, a bounded queue
     that drops), `LogShare` (`{"t":"logs"}`, gzip in base64 parts). `ProblemReport` is the status screen's "Report a
     problem" (the log, `About`, kept reports; `Redact` hides addresses and names; `ReportProvider` shares the file).
-    The plain-Java ones have JVM tests. Never log keys, tokens or passphrases: the log is handed to senders.
+    `ReceiverLogs`: the sender side of 6a, a phone showing its screen asks that receiver for its log over the same
+    session (a new plain connection would show Allow on the TV, so other receivers are only listed). `ReportUpload`:
+    "Send to the developers", the report as a GlitchTip (Sentry) event and its zip as an attachment, only in a build
+    with `-PluchReportDsn=https://<key>@<host>/<project>` (`BuildConfig.REPORT_DSN`; empty, as in F-Droid's build:
+    no button). The plain-Java ones have JVM tests. Never log keys, tokens or passphrases: the log is handed to senders.
 - `android/app/src/androidTest/`: on-device tests; `MirrorStartTest` plays the sender over localhost.
 - `tools/testsend.py`: a test sender (ffmpeg's test pattern) for checking a receiver by hand.
 

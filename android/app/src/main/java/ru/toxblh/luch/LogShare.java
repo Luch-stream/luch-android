@@ -71,4 +71,48 @@ final class LogShare {
         }
         return s.toString();
     }
+
+    /** {@link #base64} undone, for the sender side (ReceiverLogs); null for anything that is not standard base64. */
+    static byte[] unbase64(String s) {
+        int len = s.length();
+        if (len % 4 != 0) return null;
+        int pad = len == 0 ? 0 : s.charAt(len - 1) != '=' ? 0 : s.charAt(len - 2) == '=' ? 2 : 1;
+        byte[] out = new byte[len / 4 * 3 - pad];
+        int o = 0;
+        for (int i = 0; i < len; i += 4) {
+            int n = 0;
+            for (int k = 0; k < 4; k++) {
+                char c = s.charAt(i + k);
+                int v = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26
+                        : c >= '0' && c <= '9' ? c - '0' + 52 : c == '+' ? 62 : c == '/' ? 63 : -1;
+                if (v < 0) {
+                    // '=' only as the padding at the very end
+                    if (c != '=' || i + 4 != len || k < 4 - pad) return null;
+                    v = 0;
+                }
+                n = n << 6 | v;
+            }
+            out[o++] = (byte) (n >> 16);
+            if (o < out.length) out[o++] = (byte) (n >> 8);
+            if (o < out.length) out[o++] = (byte) n;
+        }
+        return out;
+    }
+
+    /** {@link #gzip} undone; null when it is not gzip, is cut short or unpacks to more than {@code limit} bytes. */
+    static byte[] gunzip(byte[] gz, int limit) {
+        try (java.util.zip.GZIPInputStream in = new java.util.zip.GZIPInputStream(
+                new java.io.ByteArrayInputStream(gz))) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream(Math.min(limit, gz.length * 6 + 64));
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                if (out.size() + n > limit) return null;
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        } catch (IOException e) {
+            return null;
+        }
+    }
 }

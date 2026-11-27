@@ -162,4 +162,21 @@
     <string name="report_subject">Luch: a problem report</string>
     <string name="report_saved">Saved as %s</string>
     <string name="report_failed">Could not make the report: %s</string>
+    <string name="report_send">Send to the developers</string>
+    <string name="report_ready">The file is ready: %1$s, %2$s KB.\nIn it: %3$s.\n%4$s\n\n“Send to the developers” puts it on the project\'s server (no account needed), or share the file yourself.</string>
+    <string name="report_hidden">Addresses and names are hidden.</string>
+    <string name="report_kept">Addresses and names are kept as they are.</string>
+    <string name="report_share">Share…</string>
+    <string name="report_save">Save</string>
+    <string name="report_sending">Sending…</string>
+    <string name="report_sent">Sent. Report number %s — tell it to us if you write in the chat.</string>
+    <string name="report_sent_text_only">Only the text went: the server did not take the file itself. If we ask for it, share it too.</string>
+    <string name="report_copy">Copy</string>
+    <string name="report_copied">Copied: %s</string>
+    <string name="report_not_sent">Not sent: %s.\n\nThe file is still here: share it or save it.</string>
+    <string name="report_why_big">the file is too big for the server</string>
+    <string name="report_why_many">too many reports lately, try later</string>
+    <string name="report_why_refused">the server refused it (%s)</string>
+    <string name="report_why_server">the server has a problem (%s), try later</string>
+    <string name="report_why_network">no connection to the server (%s)</string>
 </resources>
