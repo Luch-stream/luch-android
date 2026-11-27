@@ -124,4 +124,7 @@
     <string name="share_photo_label">Луч: только фото</string>
     <string name="sound_android10">Нужен Android 10+</string>
     <string name="hot_badge">🔥 горячо — снизьте качество</string>
+    <string name="action_say_address">Сказать адрес звуком</string>
+    <string name="sender_looking">Компьютер рядом ищет телевизор: этот теперь виден ему по Bluetooth.</string>
+    <string name="status_no_address">Сетевого адреса пока нет</string>
 </resources>

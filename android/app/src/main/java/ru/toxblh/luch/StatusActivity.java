@@ -245,6 +245,7 @@ public class StatusActivity extends Activity {
                 spacer();
                 settingsCard(enabled);
             }
+            if (enabled) findMe();
         }
         updateButton(demo);
         rings(root);
@@ -486,6 +487,7 @@ public class StatusActivity extends Activity {
     public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
         if (request == REQUEST_AUDIO && pending != null) askCapture(); // without it the picture goes alone
+        if (request == REQUEST_NEARBY) Nearby.start(this);
     }
 
     private void askCapture() {
@@ -793,10 +795,13 @@ public class StatusActivity extends Activity {
         }).start();
     }
 
-    /** What the code says: a phone with Luch opens it, picks this device and starts showing its screen here. */
+    /**
+     * What the code says: a phone with Luch opens it, picks this device and starts showing its screen here; a
+     * computer's camera reads it too (PROTOCOL.md 1e), and its one-time token pairs it.
+     */
     private String link(String name, String address) { // name is not used any more, see below
         // short on purpose: fewer, bigger dots scan better; the name comes from the sender's own list when it knows the device
-        return "luch://connect?host=" + address + "&port=" + Luch.PORT;
+        return new Card(Card.RECEIVER, Luch.id(this), address, Luch.PORT, Card.Pairing.current()).link();
     }
 
     private TextView chip(String s) {
@@ -854,6 +859,34 @@ public class StatusActivity extends Activity {
         hint.setPadding(dp(8), dp(14), dp(8), 0);
         content.addView(hint);
     }
+
+    /**
+     * For a computer that cannot find this TV on the network (PROTOCOL.md 1): a line when one nearby is looking
+     * (heard over Bluetooth), and the address said by sound for its microphone.
+     */
+    private void findMe() {
+        if (System.currentTimeMillis() - Nearby.lookingAt < 120_000) {
+            TextView t = Ui.text(this, getString(R.string.sender_looking), 15, Ui.AMBER, false);
+            t.setPadding(dp(4), dp(16), dp(4), 0);
+            content.addView(t);
+        }
+        content.addView(Ui.button(this, getString(R.string.action_say_address), false, v -> {
+            if (!Nearby.say(this)) Toast.makeText(this, R.string.status_no_address, Toast.LENGTH_SHORT).show();
+        }), pill(12));
+        askBluetoothOnce();
+    }
+
+    /** Android 12+ asks for "Nearby devices" before an app may advertise; once, and the TV works without it. */
+    private void askBluetoothOnce() {
+        if (Build.VERSION.SDK_INT < 31 || !Nearby.NO_PERMISSION.equals(Nearby.unavailable(this))) return;
+        android.content.SharedPreferences prefs = getSharedPreferences("luch", MODE_PRIVATE);
+        if (prefs.getBoolean("nearby_asked", false) || getIntent().getBooleanExtra("demo", false)) return;
+        prefs.edit().putBoolean("nearby_asked", true).apply();
+        requestPermissions(new String[] {"android.permission.BLUETOOTH_ADVERTISE", "android.permission.BLUETOOTH_SCAN"},
+                REQUEST_NEARBY);
+    }
+
+    private static final int REQUEST_NEARBY = 80;
 
     private void settingsCard(boolean enabled) {
         LinearLayout card = new LinearLayout(this);

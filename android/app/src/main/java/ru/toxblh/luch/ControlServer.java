@@ -141,11 +141,23 @@ final class ControlServer {
                 }
                 String t = msg.optString("t");
                 switch (t) {
-                    case "hello":
+                    case "hello": {
+                        // A probe is discovery asking who is here (PROTOCOL.md 1b): it gets the welcome and goes, and
+                        // the TV says nothing about it. A pairing token from the QR code or the sound is checked
+                        // either way, and used up by a real hello only (1e).
+                        boolean probe = msg.optBoolean("probe");
+                        String token = Card.Pairing.check(msg.optString("token", null), probe);
+                        JSONObject w = welcome();
+                        if (probe) w.put("probe", true);
+                        if (token != null) w.put("token", token);
+                        if (probe) {
+                            send(out, w);
+                            break;
+                        }
                         peerId = msg.optString("id", address);
                         peerName = msg.optString("name", address);
                         peerApp = msg.optString("app");
-                        send(out, welcome());
+                        send(out, w);
                         SENDERS.add(control);
                         if (wants(msg, "reports")) {
                             org.json.JSONArray reports = Reports.pending(context);
@@ -156,8 +168,10 @@ final class ControlServer {
                         Bench.autoRun(context, ControlServer::broadcastBench);
                         Luch.connected(new Luch.Peer(peerId, peerName, address));
                         say(context.getString(R.string.toast_connected, peerName));
-                        Log.i(LuchService.TAG, "hello from " + peerName + " " + address + " app=" + msg.optString("app"));
+                        Log.i(LuchService.TAG, "hello from " + peerName + " " + address + " app=" + msg.optString("app")
+                                + (token == null ? "" : " token=" + token));
                         break;
+                    }
                     case "ping":
                         send(out, new JSONObject().put("t", "pong").put("n", msg.optInt("n")));
                         break;

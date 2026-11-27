@@ -125,4 +125,7 @@
     <string name="share_photo_label">Luch: photos only</string>
     <string name="sound_android10">Android 10 or newer</string>
     <string name="hot_badge">🔥 hot — lower the quality</string>
+    <string name="action_say_address">Say the address by sound</string>
+    <string name="sender_looking">A computer nearby is looking for a TV: this one now shows itself to it over Bluetooth.</string>
+    <string name="status_no_address">No network address yet</string>
 </resources>
