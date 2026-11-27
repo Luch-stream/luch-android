@@ -363,8 +363,11 @@ final class TestSender {
         }
     }
 
-    /** {@code data} as it goes on the wire: sealed when the session has a key (MediaCrypt), else as it is. */
-    private byte[] seal(int kind, long seq, byte[] header, byte[] data) throws IOException {
+    /**
+     * {@code data} as it goes on the wire: sealed when the session has a key (MediaCrypt), else as it is. Synchronized:
+     * the audio and video threads share one Cipher, which is not safe to use from two at once.
+     */
+    private synchronized byte[] seal(int kind, long seq, byte[] header, byte[] data) throws IOException {
         if (crypt == null) return data;
         try {
             return crypt.seal(kind, seq, MediaCrypt.aad(header, 0), data);
