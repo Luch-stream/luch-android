@@ -10,6 +10,8 @@ sides together.
   - `LuchService`: the always-on service; `ControlServer`: the TCP control port 47800.
   - `MirrorSession`: one session (UDP video and audio, decoding); `MirrorActivity`: its screen.
   - `LowLatencyDecoder`: decoder setup; `Bench` and `Caps`: what the TV can do, sent in the welcome.
+  - `LatencyOverlay`, `LatencyPattern`: the latency lab's pattern over the mirror screen (PROTOCOL.md, section 4h);
+    the layout and the QR code must stay the same as luch-linux's `luch-latency/src/pattern.rs` (`LatencyPatternTest`).
   - `Reports`: crash and error reports kept on the TV and handed to a sender that asks (PROTOCOL.md, section 6).
     No server and no logs; keep addresses and names out of anything added to a report.
 - `android/app/src/androidTest/`: on-device tests; `MirrorStartTest` plays the sender over localhost.

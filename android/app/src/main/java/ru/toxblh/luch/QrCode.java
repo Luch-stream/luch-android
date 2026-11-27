@@ -3,23 +3,29 @@ package ru.toxblh.luch;
 import java.nio.charset.StandardCharsets;
 
 /**
- * A QR code, byte mode, error correction H (a third of the picture can be lost, so it survives being drawn as dots),
- * versions 1-12 (up to 154 bytes). Standard layout, mask 0.
+ * A QR code, byte mode, versions 1-12, standard layout, mask 0. Error correction H (a third of the picture can be
+ * lost, so it survives being drawn as dots; up to 154 bytes) or L (the fewest modules, for a code drawn sharp that a
+ * camera reads across a room; up to 367 bytes).
  */
 final class QrCode {
-    private static final int[] ECC_PER_BLOCK = {-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28};
-    private static final int[] BLOCKS = {-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11};
+    private static final int[] ECC_PER_BLOCK_H = {-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28, 24, 28};
+    private static final int[] BLOCKS_H = {-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8, 11, 11};
+    private static final int[] ECC_PER_BLOCK_L = {-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18, 20, 24};
+    private static final int[] BLOCKS_L = {-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4, 4, 4};
+    /** The error correction level as the format bits carry it: L is 1, H is 2. */
+    private final int level;
 
     final int size;
     private final boolean[][] modules;
     private final boolean[][] function;
 
-    private QrCode(int version, byte[] data) {
+    private QrCode(int version, byte[] data, int level) {
+        this.level = level;
         size = version * 4 + 17;
         modules = new boolean[size][size];
         function = new boolean[size][size];
         drawFunctionPatterns(version);
-        drawCodewords(interleave(data, version));
+        drawCodewords(interleave(data, version, level));
         for (int y = 0; y < size; y++) {
             for (int x = 0; x < size; x++) {
                 if (!function[y][x] && (x + y) % 2 == 0) modules[y][x] = !modules[y][x];
@@ -38,9 +44,26 @@ final class QrCode {
     }
 
     static QrCode encode(String text) {
+        return encode(text, 2);
+    }
+
+    /** Error correction L: what the latency lab draws (PROTOCOL.md, section 4h). */
+    static QrCode encodeLow(String text) {
+        return encode(text, 1);
+    }
+
+    private static int[] eccPerBlock(int level) {
+        return level == 1 ? ECC_PER_BLOCK_L : ECC_PER_BLOCK_H;
+    }
+
+    private static int[] blocks(int level) {
+        return level == 1 ? BLOCKS_L : BLOCKS_H;
+    }
+
+    private static QrCode encode(String text, int level) {
         byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
         for (int version = 1; version <= 12; version++) {
-            int capacity = rawModules(version) / 8 - ECC_PER_BLOCK[version] * BLOCKS[version];
+            int capacity = rawModules(version) / 8 - eccPerBlock(level)[version] * blocks(level)[version];
             int countBits = version < 10 ? 8 : 16;
             int needBits = 4 + countBits + bytes.length * 8;
             if (needBits > capacity * 8) continue;
@@ -54,7 +77,7 @@ final class QrCode {
             byte[] data = new byte[capacity];
             for (int i = 0; i < len[0]; i++) if (bits.get(i)) data[i >> 3] |= 1 << (7 - (i & 7));
             for (int i = len[0] / 8, pad = 0xEC; i < capacity; i++, pad ^= 0xEC ^ 0x11) data[i] = (byte) pad;
-            return new QrCode(version, data);
+            return new QrCode(version, data, level);
         }
         throw new IllegalArgumentException("too long for a QR code");
     }
@@ -125,9 +148,9 @@ final class QrCode {
         }
     }
 
-    /** Error correction H is 2 in the format bits; the mask is 0. */
+    /** The error correction level (L 1, H 2) and mask 0 in the format bits. */
     private void drawFormatBits() {
-        int data = 2 << 3;
+        int data = level << 3;
         int rem = data;
         for (int i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
         int bits = (data << 10 | rem) ^ 0x5412;
@@ -163,8 +186,8 @@ final class QrCode {
         }
     }
 
-    private static byte[] interleave(byte[] data, int ver) {
-        int blocks = BLOCKS[ver], ecc = ECC_PER_BLOCK[ver];
+    private static byte[] interleave(byte[] data, int ver, int level) {
+        int blocks = blocks(level)[ver], ecc = eccPerBlock(level)[ver];
         int raw = rawModules(ver) / 8;
         int shortLen = raw / blocks, shortCount = blocks - raw % blocks;
         byte[] divisor = divisor(ecc);

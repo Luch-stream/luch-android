@@ -61,7 +61,9 @@ luchctl mirror "<TV name>"          # mirror a monitor (also: window, virtual, f
 luchctl stop "<TV name>"
 ```
 
-On the TV, **OK** shows or hides the statistics (latency, bitrate, frames, decoder) and **Back** ends the session.
+On the TV, **OK** shows or hides the statistics (latency, bitrate, frames, decoder) and **Back** ends the session. The latency
+lab (luch-linux, `docs/latency-lab.md`) measures the whole way from the computer's screen to the TV's with a phone
+filming both at 240 fps; the receiver then draws its own pattern in the corner (PROTOCOL.md, section 4h).
 
 ## Crash reports
 
