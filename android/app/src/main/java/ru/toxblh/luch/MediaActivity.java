@@ -59,6 +59,8 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     private MediaPlayer player;
     private boolean prepared, surfaceReady, ended;
     private String state = "loading";
+    /** The player waits for data while it should play: told as "loading", so a sender stops moving its clock. */
+    private boolean buffering;
     private float rate = 1f;
     private boolean wantPlaying = true;
     /** Where to start or come back to, in ms (a new video's {@code start}, or where it was when the screen went). */
@@ -218,6 +220,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         message.setText(m.title.isEmpty() ? getString(R.string.media_loading) : m.title + "\n" + getString(R.string.media_loading));
         subtitle.setText("");
         state = "loading";
+        buffering = false;
         lastBy = "sender";
         report(null);
         showOsd();
@@ -269,8 +272,17 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
                 return true;
             });
             p.setOnInfoListener((mp, what, extra) -> {
-                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) message.setText(getString(R.string.media_loading));
-                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) message.setText("");
+                if (mp != player) return false;
+                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                    message.setText(getString(R.string.media_loading));
+                    buffering = true;
+                    report(null);
+                }
+                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
+                    message.setText("");
+                    buffering = false;
+                    report(null);
+                }
                 return false;
             });
             p.setOnSeekCompleteListener(mp -> report(null));
@@ -428,7 +440,10 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             return;
         }
         long dur = p.getDuration();
-        long to = Math.max(0, dur > 0 ? Math.min(ms, dur - 500) : ms);
+        // A live stream has no duration, and seeking in it ends playback with error -38 (a page's player sends where
+        // it was in its own window of the stream).
+        if (dur <= 0) return;
+        long to = Math.max(0, Math.min(ms, dur - 500));
         if (Build.VERSION.SDK_INT >= 26) p.seekTo(to, MediaPlayer.SEEK_CLOSEST);
         else p.seekTo((int) to);
         if (ended && to < dur - 1000) ended = false;
@@ -535,7 +550,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         boolean live = prepared && dur <= 0;
         JSONObject s = new JSONObject()
                 .put("t", "media_state")
-                .put("state", state)
+                .put("state", buffering && "playing".equals(state) ? "loading" : state)
                 .put("pos", position() / 1000.0)
                 .put("dur", live || dur <= 0 ? JSONObject.NULL : dur / 1000.0)
                 .put("rate", (double) rate)
@@ -744,6 +759,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         subTrack = -1;
         subtitle.setText("");
         state = "loading";
+        buffering = false;
         message.setText(getString(R.string.media_loading));
         main.removeCallbacks(loadTimeout);
         main.postDelayed(loadTimeout, LOAD_MS);
