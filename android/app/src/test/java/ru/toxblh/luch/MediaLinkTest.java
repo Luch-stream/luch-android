@@ -172,4 +172,15 @@ public class MediaLinkTest {
         // A link that says nothing about itself: the web's own kind.
         assertEquals("text/vtt", MediaLink.subtitleMime(null, "https://cdn.example/s?id=1"));
     }
+
+    @Test
+    public void aLiveStreamShowsHowLongItHasPlayedHere() {
+        long t = MediaLink.played(0, -1, 1_000, true); // the first count only starts the clock
+        assertEquals(0, t);
+        t = MediaLink.played(t, 1_000, 8_000, true);
+        assertEquals(7_000, t);
+        t = MediaLink.played(t, 8_000, 20_000, false); // paused or waiting for data: not counted
+        assertEquals(7_000, t);
+        assertEquals(9_500, MediaLink.played(t, 20_000, 22_500, true));
+    }
 }

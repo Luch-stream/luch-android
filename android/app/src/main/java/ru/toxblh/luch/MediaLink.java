@@ -206,6 +206,14 @@ final class MediaLink {
         return out;
     }
 
+    /**
+     * A live stream's time played here, counted on: what was counted until `last` (elapsed realtime ms, -1 before
+     * the first count) plus the time since, when it played meanwhile.
+     */
+    static long played(long total, long last, long now, boolean playing) {
+        return playing && last >= 0 ? total + Math.max(0, now - last) : total;
+    }
+
     /** The adaptive kinds, named for the player; null for a file, whose kind the player finds from its bytes. */
     static String streamMime(String mime) {
         String m = mime == null ? "" : mime.toLowerCase(Locale.ROOT);
