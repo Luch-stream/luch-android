@@ -362,7 +362,9 @@ either   → {"t":"stop"}                   receiver adds "by":"receiver","reaso
   sender must not make the TV reach into its network), with `bad_link`. `headers` (only `Referer`, `User-Agent`,
   `Origin`, `Cookie`, `Authorization`; others are ignored) go with every request. `via:"sender"`: every link points at
   the sender's address, as for photos (section 4a): local files, or a stream the sender relays (a page behind a VPN, a
-  site that needs the browser's cookies, Wi-Fi Direct). The sender serves HTTP/1.1 with `Range`, so the receiver can seek.
+  site that needs the browser's cookies, Wi-Fi Direct). A relayed HLS playlist or DASH manifest comes with its links
+  pointing at the sender too (a manifest gets a `BaseURL` of a folder the sender relays, as its pieces' names are
+  templates). The sender serves HTTP/1.1 with `Range`, so the receiver can seek.
 - **State.** The receiver owns the playback; a sender (and the page, the remote, a phone) only asks. `media_state`
   goes to the sender that started it on every change of `state`, `rate`, tracks or a seek, and every 5 s while
   playing; between them the sender moves `pos` on by `rate` × elapsed time. `"do":"state"` asks for one now. `by` says who caused the change (the
