@@ -43,6 +43,9 @@ import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.Renderer;
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector;
+import androidx.media3.exoplayer.video.VideoRendererEventListener;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 
 import org.json.JSONArray;
@@ -250,8 +253,17 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback, P
             if (agent != null) http.setUserAgent(agent);
             http.setDefaultRequestProperties(headers);
             // FFmpeg's sound decoders first where the build has them (DTS, TrueHD, AC-3 on a TV without the licence);
-            // the TV's own decoders otherwise, and for the picture.
-            DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
+            // the picture always from the TV's own decoders: the library's software video decoder would be found as
+            // well, and a TV's CPU cannot decode a film.
+            DefaultRenderersFactory renderers = new DefaultRenderersFactory(this) {
+                @Override
+                protected void buildVideoRenderers(Context context, int mode, MediaCodecSelector selector,
+                        boolean fallback, Handler handler, VideoRendererEventListener listener, long joining,
+                        ArrayList<Renderer> out) {
+                    super.buildVideoRenderers(context, EXTENSION_RENDERER_MODE_OFF, selector, fallback, handler,
+                            listener, joining, out);
+                }
+            }
                     .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
                     .setEnableDecoderFallback(true);
             ExoPlayer p = new ExoPlayer.Builder(this, renderers)
