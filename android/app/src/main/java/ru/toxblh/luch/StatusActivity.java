@@ -930,10 +930,18 @@ public class StatusActivity extends Activity {
             forget.setPadding(dp(20), dp(14), dp(20), dp(14));
             forget.setFocusable(true);
             forget.setClickable(true);
-            forget.setOnClickListener(v -> {
-                gate.forgetAll();
-                render();
-            });
+            // One press of OK on the remote would undo every pairing: asked first, "Cancel" in focus.
+            forget.setOnClickListener(v -> new android.app.AlertDialog.Builder(this,
+                    android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle(getString(R.string.forget_title, paired))
+                    .setMessage(R.string.forget_message)
+                    .setPositiveButton(R.string.forget_yes, (d, w) -> {
+                        gate.forgetAll();
+                        render();
+                    })
+                    .setNegativeButton(R.string.rename_cancel, null)
+                    .show()
+                    .getButton(android.content.DialogInterface.BUTTON_NEGATIVE).requestFocus());
             card.addView(forget);
         }
         if (SleepService.supported()) {
@@ -945,13 +953,11 @@ public class StatusActivity extends Activity {
             card.addView(sleepRow());
         }
         // Sync's acoustic calibration plays only when a sender asks; here its detector runs on a recording made up in
-        // memory, silently.
-        View line = new View(this);
-        line.setBackgroundColor(Ui.DIVIDER);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
-        lp.setMargins(dp(20), 0, dp(20), 0);
-        card.addView(line, lp);
-        card.addView(dryRunRow());
+        // memory, silently. A developer's check: not in the settings of a release.
+        if (BuildConfig.DEBUG) {
+            card.addView(divider());
+            card.addView(dryRunRow());
+        }
         card.addView(divider());
         card.addView(reportRow());
         content.addView(card, Ui.below(this, 20));

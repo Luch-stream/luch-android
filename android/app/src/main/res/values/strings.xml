@@ -117,7 +117,7 @@
     <string name="photo_failed">Could not load the photo</string>
     <string name="share_label">Luch</string>
     <string name="share_pick">Where to show</string>
-    <string name="share_none">No Luch receivers in sight. Start Luch on the TV.</string>
+    <string name="share_none">No Luch receivers in sight. Open Luch on the TV.</string>
     <string name="photo_unsupported">This receiver cannot show photos yet</string>
     <string name="photo_send_failed">Could not show the photos: %s</string>
     <string name="photo_notification">Photos on “%s”</string>
@@ -139,9 +139,12 @@
     <string name="pair_allow">Allow</string>
     <string name="pair_deny">Deny</string>
     <string name="pair_channel">Connection requests</string>
-    <string name="toast_paired">Luch: paired with %s</string>
+    <string name="toast_paired">Luch: %s connected, no code next time</string>
     <string name="setting_guest">Guest mode: forget computers at standby</string>
-    <string name="setting_paired">Forget paired computers (%d)</string>
+    <string name="setting_paired">Forget remembered computers (%d)</string>
+    <string name="forget_title">Forget the computers remembered here (%d)?</string>
+    <string name="forget_message">To show things here again, each one will need the code from this screen.</string>
+    <string name="forget_yes">Forget</string>
     <string name="action_say_address">Say the address by sound</string>
     <string name="sender_looking">A computer nearby is looking for a TV: this one now shows itself to it over Bluetooth.</string>
     <string name="status_no_address">No network address yet</string>
