@@ -22,17 +22,11 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 
 /**
  * This device showing its own screen on a receiver (a Steam Deck or a computer with luch-recv, a TV): the other direction
@@ -41,7 +35,7 @@ import java.nio.charset.StandardCharsets;
  */
 final class Sender {
     private static final String TAG = LuchService.TAG;
-    private static final int SHARD = 1376, HEADER = 24;
+    static final int SHARD = 1376, HEADER = 24;
     private static final int MAX_LONG_SIDE = 1920, FPS = 60;
 
     static volatile Session current;
@@ -104,6 +98,38 @@ final class Sender {
         return false;
     }
 
+    /** Where {@link #frame} puts each packet: the first {@code length} bytes of its buffer. */
+    interface Packets {
+        void send(int length) throws IOException;
+    }
+
+    /**
+     * One access unit as the packets of PROTOCOL.md 4, each built in {@code packet} (HEADER + SHARD bytes) and handed
+     * to {@code out}; over TLS ({@code c}) the frame is sealed as a whole first, the tag at its end.
+     */
+    static void frame(byte[] packet, MediaCrypt c, int seq, boolean key, long pts, int host, byte[] data, Packets out)
+            throws IOException {
+        int len = c == null ? data.length : data.length + MediaCrypt.TAG_BYTES;
+        int shards = Math.max(1, (len + SHARD - 1) / SHARD);
+        ByteBuffer.wrap(packet).put((byte) 1).put((byte) (key ? 1 : 0)).putShort((short) 0).putShort((short) shards)
+                .putShort((short) 0).putInt(seq).putInt((int) (pts & 0xFFFFFFFFL)).putInt(len).putShort((short) host)
+                .putShort((short) 0);
+        byte[] wire = data;
+        if (c != null) {
+            try {
+                wire = c.seal(1, seq & 0xFFFFFFFFL, MediaCrypt.aad(packet, 0), data);
+            } catch (java.security.GeneralSecurityException e) {
+                throw new IOException(e);
+            }
+        }
+        for (int k = 0; k < shards; k++) {
+            int off = k * SHARD, n = Math.min(SHARD, wire.length - off);
+            ByteBuffer.wrap(packet).putShort(2, (short) k);
+            System.arraycopy(wire, off, packet, HEADER, n);
+            out.send(HEADER + n);
+        }
+    }
+
     static final class Session {
         private final Context context;
         final Luch.Receiver to;
@@ -121,8 +147,10 @@ final class Sender {
         private volatile java.util.concurrent.BlockingQueue<JSONObject> logLines;
         private final Object logLock = new Object();
 
-        private Socket control;
-        private OutputStream out;
+        /** The control connection: paired over TLS when the receiver can, so the TV asks only once (Link). */
+        private volatile Link control;
+        /** The media key of the session over TLS (PROTOCOL.md 4, sealed media); null on the plain port. */
+        private volatile MediaCrypt crypt;
         private DatagramSocket udp;
         private VirtualDisplay display;
         private MediaCodec encoder;
@@ -172,7 +200,8 @@ final class Sender {
             } catch (JSONException | IOException ignored) {
             }
             if (feed != null) feed.stop();
-            close(control);
+            Link l = control;
+            if (l != null) l.close();
             if (udp != null) udp.close();
             if (rotation != null) {
                 ((DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE)).unregisterDisplayListener(rotation);
@@ -199,17 +228,9 @@ final class Sender {
             });
         }
 
-        private static void close(Socket s) {
-            try {
-                if (s != null) s.close();
-            } catch (IOException ignored) {
-            }
-        }
-
-        private synchronized void send(JSONObject o) throws IOException {
-            if (out == null) return;
-            out.write((o + "\n").getBytes(StandardCharsets.UTF_8));
-            out.flush();
+        private void send(JSONObject o) throws IOException {
+            Link l = control;
+            if (l != null) l.send(o);
         }
 
         private void run() {
@@ -223,19 +244,13 @@ final class Sender {
         }
 
         private void talk() throws Exception {
-            control = new Socket();
-            control.connect(new InetSocketAddress(to.address, to.port), 4000);
-            control.setTcpNoDelay(true);
-            out = control.getOutputStream();
-            BufferedReader in = new BufferedReader(new InputStreamReader(control.getInputStream(), StandardCharsets.UTF_8));
-            send(new JSONObject().put("t", "hello").put("v", Luch.VERSION).put("id", Luch.id(context))
-                    .put("name", Luch.name(context)).put("app", "luch-android").put("want", new JSONArray().put("mirror")));
-            control.setSoTimeout(4000);
-            JSONObject welcome = null;
-            while (welcome == null) {
-                JSONObject m = new JSONObject(readLine(in));
-                if ("welcome".equals(m.optString("t"))) welcome = m;
+            Link link = Link.open(context, to);
+            control = link;
+            if (ended) {
+                link.close();
+                return;
             }
+            JSONObject welcome = link.hello(Link.helloFrom(context, "mirror"), to.id, Link.pins(context), pairUi());
             this.welcome = welcome;
             String mime = chooseCodec(welcome);
             int[] size = chooseSize();
@@ -243,18 +258,10 @@ final class Sender {
             JSONObject start = new JSONObject().put("t", "start").put("mode", "mirror").put("video", new JSONObject()
                     .put("codec", mime).put("width", size[0]).put("height", size[1]).put("fps", FPS));
             if (wantAudio) start.put("audio", audioSpec());
-            send(start);
-            int port = 0;
-            while (port == 0) {
-                JSONObject m = new JSONObject(readLine(in));
-                String t = m.optString("t");
-                if ("ready".equals(t)) {
-                    port = m.getInt("video_port");
-                    audioPort = m.optInt("audio_port");
-                }
-                else if ("error".equals(t)) throw new IOException(m.optString("code") + " " + m.optString("detail"));
-            }
-            control.setSoTimeout(0);
+            JSONObject ready = link.request(start, "ready", pairUi());
+            int port = ready.getInt("video_port");
+            audioPort = ready.optInt("audio_port");
+            crypt = crypt(ready);
             udp = new DatagramSocket();
             InetAddress peer = InetAddress.getByName(to.address);
             dpi = dm.densityDpi;
@@ -272,18 +279,36 @@ final class Sender {
             if (wantAudio && audioPort > 0) {
                 // the sound goes to the receiver and the phone itself goes quiet while it does
                 feed = new AudioFeed(context, projection, udp, peer, audioPort, true);
+                feed.setCrypt(crypt(ready));   // a cipher of its own: the sound has a thread of its own
                 if (!feed.start()) feed = null;
             }
-            Thread reader = new Thread(() -> read(in), "luch-sender-read");
+            link.passPongs = true;   // this side's pings measure the round trip
+            Thread reader = new Thread(this::read, "luch-sender-read");
             reader.start();
             letIn = true;
             pump(peer, port, mime, size);
         }
 
-        private String readLine(BufferedReader in) throws IOException {
-            String l = in.readLine();
-            if (l == null) throw new IOException("the receiver closed the connection");
-            return l;
+        /** The session's key from a ready: sealed media over TLS, nothing on the plain port. */
+        private static MediaCrypt crypt(JSONObject ready) throws java.security.GeneralSecurityException {
+            String key = ready.optString("key");
+            return key.isEmpty() ? null : new MediaCrypt(android.util.Base64.decode(key, android.util.Base64.NO_WRAP));
+        }
+
+        /** What a connection asks of the person: the TV's Allow is said here, the pairing code typed in PairCode. */
+        private Link.Ui pairUi() {
+            return new Link.Ui() {
+                @Override
+                public void allowOnTv() {
+                    main.post(() -> android.widget.Toast.makeText(context, context.getString(R.string.cast_allow, to.name),
+                            android.widget.Toast.LENGTH_LONG).show());
+                }
+
+                @Override
+                public String code() throws InterruptedException {
+                    return PairCode.ask(context, to.name);
+                }
+            };
         }
 
         /** Opus, 48 kHz stereo, 20 ms packets: what the capture and the encoder of {@link AudioFeed} make. */
@@ -396,22 +421,26 @@ final class Sender {
             currentSize = size;
         }
 
-        /** What the receiver says: pong, keyframe, stats, stop, error. */
-        private void read(BufferedReader in) {
+        /** What the receiver says: pong, keyframe, stats, stop, error; pings are answered by the link. */
+        private void read() {
             try {
-                String l;
-                while (!ended && (l = in.readLine()) != null) {
-                    JSONObject m = new JSONObject(l);
+                while (!ended) {
+                    JSONObject m;
+                    try {
+                        m = control.next(Integer.MAX_VALUE);
+                    } catch (java.io.EOFException closed) {
+                        break;
+                    }
                     switch (m.optString("t")) {
                         case "ready":
+                            // a new size is a new session on the receiver: new ports, and over TLS a new key
+                            crypt = crypt(m);
+                            if (feed != null) feed.setCrypt(crypt(m));
                             audioPort = m.optInt("audio_port");
                             readyPort = m.optInt("video_port");
                             break;
                         case "keyframe":
                             wantKey = true;
-                            break;
-                        case "ping":
-                            send(new JSONObject().put("t", "pong").put("n", m.optInt("n")));
                             break;
                         case "pong":
                             if (m.optInt("n") == pingN) rtt = (SystemClock.elapsedRealtimeNanos() - pingSentAt) / 1e6;
@@ -442,7 +471,7 @@ final class Sender {
                             break;
                     }
                 }
-            } catch (IOException | JSONException e) {
+            } catch (IOException | java.security.GeneralSecurityException e) {
                 if (!ended) end("connection lost");
                 return;
             }
@@ -567,17 +596,7 @@ final class Sender {
 
         private void sendFrame(byte[] packet, InetAddress peer, int port, byte[] data, boolean key, long pts, int host)
                 throws IOException {
-            int shards = Math.max(1, (data.length + SHARD - 1) / SHARD);
-            for (int k = 0; k < shards; k++) {
-                int off = k * SHARD, n = Math.min(SHARD, data.length - off);
-                ByteBuffer h = ByteBuffer.wrap(packet);
-                h.put((byte) 1).put((byte) (key ? 1 : 0)).putShort((short) k).putShort((short) shards).putShort((short) 0)
-                        .putInt(seq).putInt((int) (pts & 0xFFFFFFFFL)).putInt(data.length).putShort((short) host)
-                        .putShort((short) 0);
-                System.arraycopy(data, off, packet, HEADER, n);
-                udp.send(new DatagramPacket(packet, HEADER + n, peer, port));
-            }
-            seq++;
+            frame(packet, crypt, seq++, key, pts, host, data, n -> udp.send(new DatagramPacket(packet, n, peer, port)));
         }
 
         /** An access unit that already opens with a parameter set (H.264 SPS = 7, HEVC VPS = 32). */

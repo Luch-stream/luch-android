@@ -437,6 +437,9 @@ final class ControlServer {
                     case "doc_page":
                         DocActivity.turnTo(control, msg.optInt("page"));
                         break;
+                    case "photo_index":
+                        PhotoActivity.turnTo(control, msg.optInt("index"));
+                        break;
                     case "pointer":
                     case "ink":
                     case "blank":

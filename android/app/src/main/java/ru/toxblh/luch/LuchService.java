@@ -296,7 +296,7 @@ public class LuchService extends Service {
                 } else if (!id.equals(Luch.id(LuchService.this))) {
                     Log.i(TAG, "receiver nearby: " + name + " " + host + ":" + s.getPort() + " id=" + id);
                     Luch.receiver(s.getServiceName(), new Luch.Receiver(id, name, text(txt, "model", ""), host,
-                            s.getPort(), text(txt, "dec", "")));
+                            s.getPort(), text(txt, "dec", ""), number(text(txt, "tls", ""))));
                 }
                 main.post(() -> {
                     resolving = false;
@@ -304,6 +304,14 @@ public class LuchService extends Service {
                 });
             }
         });
+    }
+
+    private static int number(String s) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static String text(Map<String, byte[]> txt, String key, String fallback) {

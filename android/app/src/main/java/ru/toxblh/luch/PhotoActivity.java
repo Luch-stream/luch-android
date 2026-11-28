@@ -50,6 +50,14 @@ public class PhotoActivity extends Activity {
         if (a != null) a.runOnUiThread(a::finish);
     }
 
+    /** The sender turns to another photo of its list ({"t":"photo_index"}, PROTOCOL.md 4a): only the one shown obeys. */
+    static void turnTo(MirrorSession.Control control, int index) {
+        PhotoSession s = PhotoSession.current;
+        PhotoActivity a = instance;
+        if (s == null || s.control != control || a == null || index < 0 || index >= s.items.size()) return;
+        a.runOnUiThread(() -> a.show(index));
+    }
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -174,6 +182,11 @@ public class PhotoActivity extends Activity {
         if (index == shown) return;
         shown = index;
         wanted = index;
+        // the sender follows, as for a document's page (a phone's notification says which one is up)
+        try {
+            s.control.send(new org.json.JSONObject().put("t", "photo_index").put("index", index));
+        } catch (org.json.JSONException ignored) {
+        }
         message.setText("");
         if (s.items.size() > 1) {
             badge.setText((index + 1) + " / " + s.items.size());

@@ -312,6 +312,7 @@ A sender shows pictures full screen, one at a time, in a list the person can go 
 ```
 sender   → {"t":"photo","index":0,"items":[{"url":"http://<sender>:<port>/<token>/0","mime":"image/jpeg","name":"IMG_1.jpg"}, ...]}
 receiver → {"t":"photo_ready"}            or {"t":"error","code":"photo_failed"|"busy","detail":"..."}
+either   → {"t":"photo_index","index":n}  the receiver after every turn, the sender to turn to another photo
 either   → {"t":"stop"}                   receiver adds "by":"receiver","reason":"back" when the person leaves
 ```
 
@@ -319,6 +320,10 @@ either   → {"t":"stop"}                   receiver adds "by":"receiver","reaso
   for the time of the session, with a random token in the path and only to the receiver's address. At most 200 items.
 - The receiver must refuse a list whose links point anywhere but the address the control connection came from, and fetch
   with a plain `HTTP/1.0 GET` (Android refuses cleartext through its own HTTP stack; the link is on the local network).
+- `photo_index` is like a document's `doc_page` (4g): a phone's notification goes to the next photo with it, and
+  shows which one is up from the receiver's. An older receiver answers it `unknown`; a sender then sends the whole
+  `photo` again with the new `index` (and takes the `stop` with `reason` `replaced` that the receiver sends to the
+  same connection for the old list as part of it).
 - A new `photo` replaces the list. The receiver shows each picture fitted on black, rotated by its EXIF orientation,
   down-scaled to what the screen can use; left and right on the remote (or a swipe) go to the neighbour, Back leaves.
 - Something already on the screen (a mirroring session, photos, a video, a document): see "Who may take the screen"
