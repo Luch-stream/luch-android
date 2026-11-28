@@ -206,6 +206,15 @@ final class MediaLink {
         return out;
     }
 
+    /**
+     * How far a live stream has played since it started here, in ms: its clock (program time where the stream says
+     * it, else the position in its sliding window) now, less what it was at the start; never below 0, as a window
+     * without program time can slide back.
+     */
+    static long livePosition(long now, long origin) {
+        return Math.max(0, now - origin);
+    }
+
     /** The adaptive kinds, named for the player; null for a file, whose kind the player finds from its bytes. */
     static String streamMime(String mime) {
         String m = mime == null ? "" : mime.toLowerCase(Locale.ROOT);

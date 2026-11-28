@@ -172,4 +172,13 @@ public class MediaLinkTest {
         // A link that says nothing about itself: the web's own kind.
         assertEquals("text/vtt", MediaLink.subtitleMime(null, "https://cdn.example/s?id=1"));
     }
+
+    @Test
+    public void aLiveStreamShowsHowLongItHasPlayedHere() {
+        // Program time 2026-11-28 12:00:00 at the start, 7 s later now: 7 s, not the position in the window.
+        long origin = 1_795_867_200_000L;
+        assertEquals(7_000, MediaLink.livePosition(origin + 7_000, origin));
+        // A window without program time that slid back shows 0, never less.
+        assertEquals(0, MediaLink.livePosition(7_191_500, 7_194_000));
+    }
 }
