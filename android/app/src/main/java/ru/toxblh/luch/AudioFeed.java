@@ -42,6 +42,7 @@ final class AudioFeed {
     private MediaCodec encoder;
     private Thread thread;
     private int seq;
+    private volatile MediaCrypt crypt;
 
     AudioFeed(Context context, MediaProjection projection, DatagramSocket udp, InetAddress peer, int port, boolean muteLocal) {
         this.context = context;
@@ -121,7 +122,7 @@ final class AudioFeed {
     private void loop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO);
         MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-        byte[] packet = new byte[24 + 1500];
+        byte[] packet = new byte[24 + 1500 + MediaCrypt.TAG_BYTES];
         long lastConfig = 0;
         try {
             record.startRecording();
@@ -157,14 +158,34 @@ final class AudioFeed {
         }
     }
 
+    /**
+     * Over TLS the packets are sealed (PROTOCOL.md 4) with this session's key; a cipher apart from the picture's, which
+     * is used on another thread. Null on the plain port.
+     */
+    void setCrypt(MediaCrypt c) {
+        crypt = c;
+    }
+
     private void send(byte[] packet, byte[] data, boolean config, long pts) throws java.io.IOException {
         if (data.length > 1500 || port == 0) return;
+        MediaCrypt c = crypt;
+        int len = c == null ? data.length : data.length + MediaCrypt.TAG_BYTES;
+        // sealed, the OpusHead takes a number of its own too: a nonce is never used twice under one key
+        int s = config && c == null ? 0 : seq++;
         ByteBuffer h = ByteBuffer.wrap(packet).order(ByteOrder.BIG_ENDIAN);
         h.put((byte) 2).put((byte) (config ? 2 : 0)).putShort((short) 0).putShort((short) 1).putShort((short) 0)
-                .putInt(config ? 0 : seq++).putInt((int) (pts & 0xFFFFFFFFL)).putInt(data.length).putShort((short) 0)
+                .putInt(s).putInt((int) (pts & 0xFFFFFFFFL)).putInt(len).putShort((short) 0)
                 .putShort((short) 0);
-        System.arraycopy(data, 0, packet, 24, data.length);
-        udp.send(new DatagramPacket(packet, 24 + data.length, peer, port));
+        byte[] wire = data;
+        if (c != null) {
+            try {
+                wire = c.seal(2, s & 0xFFFFFFFFL, MediaCrypt.aad(packet, 0), data);
+            } catch (java.security.GeneralSecurityException e) {
+                throw new java.io.IOException(e);
+            }
+        }
+        System.arraycopy(wire, 0, packet, 24, wire.length);
+        udp.send(new DatagramPacket(packet, 24 + wire.length, peer, port));
     }
 
     /** The 19-byte OpusHead the receiver's decoder starts from: stereo, 48 kHz, the encoder's 6.5 ms of lead-in. */

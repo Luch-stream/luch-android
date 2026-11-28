@@ -47,14 +47,21 @@ final class Luch {
         final String address;
         final int port;
         final String codecs;
+        /** Its TLS port from the TXT record ("tls", PROTOCOL.md 1a), 0 when it said none. */
+        final int tlsPort;
 
         Receiver(String id, String name, String model, String address, int port, String codecs) {
+            this(id, name, model, address, port, codecs, 0);
+        }
+
+        Receiver(String id, String name, String model, String address, int port, String codecs, int tlsPort) {
             this.id = id;
             this.name = name;
             this.model = model;
             this.address = address;
             this.port = port;
             this.codecs = codecs;
+            this.tlsPort = tlsPort;
         }
     }
 

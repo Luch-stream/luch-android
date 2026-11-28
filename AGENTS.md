@@ -37,6 +37,14 @@ sides together.
     "Send to the developers", the report as a GlitchTip (Sentry) event and its zip as an attachment, only in a build
     with `-PluchReportDsn=https://<key>@<host>/<project>` (`BuildConfig.REPORT_DSN`; empty, as in F-Droid's build:
     no button). The plain-Java ones have JVM tests. Never log keys, tokens or passphrases: the log is handed to senders.
+  - The phone as a sender: `Link` (its control connection: TLS with its own key `luch-sender`, paired once with the
+    code the TV shows (`PairCode` takes it) and pinned in `luch_pins`; the plain port only for a TV that has no TLS
+    and was never paired, its requests sent again until Allow on the TV). `Sender` shows the screen over it and seals
+    its media over TLS. "Show on TV" in the share sheet: `ShareActivity` (which TV: `ReceiverChoice`, the only one at
+    once, the last used on top; `ReceiverBrowse` when the receiver is off), `SharePlan` (what was shared → photo,
+    media, doc, open_app, or the screen with the file opened here for office files), `ShareServer` (the files over
+    HTTP with Range, to that receiver only), `CastService` (the show, its notification: photos and pages turned,
+    pause, stop). `Link`, `SharePlan`, `ShareServer`, `ReceiverChoice` and `Sender.frame` have JVM tests.
 - `android/app/src/androidTest/`: on-device tests; `MirrorStartTest` plays the sender over localhost.
 - `tools/testsend.py`: a test sender (ffmpeg's test pattern) for checking a receiver by hand.
 
