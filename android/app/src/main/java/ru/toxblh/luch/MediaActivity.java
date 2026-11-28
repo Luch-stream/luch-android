@@ -33,7 +33,6 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
 import androidx.media3.common.TrackSelectionOverride;
-import androidx.media3.common.Timeline;
 import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.Tracks;
 import androidx.media3.common.VideoSize;
@@ -231,7 +230,8 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback, P
         message.setText(m.title.isEmpty() ? getString(R.string.media_loading) : m.title + "\n" + getString(R.string.media_loading));
         subtitle.setText("");
         state = "loading";
-        liveOrigin = C.TIME_UNSET;
+        livePlayed = 0;
+        liveCounted = -1;
         buffering = false;
         lastBy = "sender";
         report(null);
@@ -546,27 +546,20 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback, P
         return p == null || !prepared ? resumeAt : p.getCurrentPosition();
     }
 
-    /** Where a live stream was when it started here, as the stream's own clock (ms); TIME_UNSET before. */
-    private long liveOrigin = C.TIME_UNSET;
+    /** How long a live stream has played here (ms), and when that was last counted (elapsed realtime, or -1). */
+    private long livePlayed, liveCounted = -1;
 
     /**
-     * The position to show and report: for a live stream, how far it has played since it started here (its window
-     * slides on, so the position in it would run backwards and jump); otherwise the position.
+     * The position to show and report: for a live stream, how long it has played here (the position in its window
+     * runs backwards and jumps as the window slides on); otherwise the position.
      */
     private long shownPosition() {
         ExoPlayer p = player;
         if (p == null || !prepared || !p.isCurrentMediaItemLive()) return position();
-        long now = liveClock(p);
-        if (liveOrigin == C.TIME_UNSET) liveOrigin = now;
-        return MediaLink.livePosition(now, liveOrigin);
-    }
-
-    /** The live stream's own clock: its window's start (its program time, when it says) plus the position in it. */
-    private static long liveClock(ExoPlayer p) {
-        Timeline t = p.getCurrentTimeline();
-        long start = t.isEmpty() ? C.TIME_UNSET
-                : t.getWindow(p.getCurrentMediaItemIndex(), new Timeline.Window()).windowStartTimeMs;
-        return (start == C.TIME_UNSET ? 0 : start) + p.getCurrentPosition();
+        long now = android.os.SystemClock.elapsedRealtime();
+        livePlayed = MediaLink.played(livePlayed, liveCounted, now, p.isPlaying());
+        liveCounted = now;
+        return livePlayed;
     }
 
     /** The length in ms; -1 when unknown, and for a live stream (its window is no length to show). */
@@ -781,7 +774,8 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback, P
         releasePlayer();
         subtitle.setText("");
         state = "loading";
-        liveOrigin = C.TIME_UNSET;
+        livePlayed = 0;
+        liveCounted = -1;
         buffering = false;
         message.setText(getString(R.string.media_loading));
         main.removeCallbacks(loadTimeout);

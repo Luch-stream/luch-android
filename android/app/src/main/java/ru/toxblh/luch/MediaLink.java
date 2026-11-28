@@ -207,12 +207,11 @@ final class MediaLink {
     }
 
     /**
-     * How far a live stream has played since it started here, in ms: its clock (program time where the stream says
-     * it, else the position in its sliding window) now, less what it was at the start; never below 0, as a window
-     * without program time can slide back.
+     * A live stream's time played here, counted on: what was counted until `last` (elapsed realtime ms, -1 before
+     * the first count) plus the time since, when it played meanwhile.
      */
-    static long livePosition(long now, long origin) {
-        return Math.max(0, now - origin);
+    static long played(long total, long last, long now, boolean playing) {
+        return playing && last >= 0 ? total + Math.max(0, now - last) : total;
     }
 
     /** The adaptive kinds, named for the player; null for a file, whose kind the player finds from its bytes. */

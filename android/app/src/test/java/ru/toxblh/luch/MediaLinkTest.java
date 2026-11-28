@@ -175,10 +175,12 @@ public class MediaLinkTest {
 
     @Test
     public void aLiveStreamShowsHowLongItHasPlayedHere() {
-        // Program time 2026-11-28 12:00:00 at the start, 7 s later now: 7 s, not the position in the window.
-        long origin = 1_795_867_200_000L;
-        assertEquals(7_000, MediaLink.livePosition(origin + 7_000, origin));
-        // A window without program time that slid back shows 0, never less.
-        assertEquals(0, MediaLink.livePosition(7_191_500, 7_194_000));
+        long t = MediaLink.played(0, -1, 1_000, true); // the first count only starts the clock
+        assertEquals(0, t);
+        t = MediaLink.played(t, 1_000, 8_000, true);
+        assertEquals(7_000, t);
+        t = MediaLink.played(t, 8_000, 20_000, false); // paused or waiting for data: not counted
+        assertEquals(7_000, t);
+        assertEquals(9_500, MediaLink.played(t, 20_000, 22_500, true));
     }
 }
