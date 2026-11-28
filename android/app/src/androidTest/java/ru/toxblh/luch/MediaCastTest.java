@@ -121,7 +121,7 @@ public class MediaCastTest {
     @Test
     public void nothingPlayableIsSaid() throws Exception {
         sender.send(new JSONObject().put("t", "media").put("via", "sender").put("src", new JSONArray()
-                .put(new JSONObject().put("url", http.url("x.mpd")).put("mime", "application/dash+xml"))));
+                .put(new JSONObject().put("url", http.url("x.flv")).put("mime", "video/x-flv"))));
         JSONObject e = until(m -> m.optString("t").equals("error"), 5_000, "error");
         assertEquals("media_failed", e.getString("code"));
     }
@@ -170,6 +170,25 @@ public class MediaCastTest {
 
         sender.send(new JSONObject().put("t", "stop"));
         waitFor(() -> MediaCast.current == null, 3_000, "the player closed");
+    }
+
+    /**
+     * What Android's MediaPlayer could not play: DASH, and HLS in fragmented MP4 with its sound tracks as separate
+     * renditions (made from the clip with ffmpeg; see the assets' folders).
+     */
+    @Test
+    public void dashAndFragmentedHlsWithSeparateSoundPlay() throws Exception {
+        String[][] kinds = {{"dash/clip.mpd", "application/dash+xml"}, {"cmaf/master.m3u8", "application/vnd.apple.mpegurl"}};
+        for (String[] k : kinds) {
+            sender.send(new JSONObject().put("t", "media").put("via", "sender").put("title", k[0])
+                    .put("src", new JSONArray().put(new JSONObject().put("url", http.url(k[0])).put("mime", k[1]))));
+            until(m -> m.optString("t").equals("media_ready"), 5_000, "media_ready for " + k[0]);
+            JSONObject s = state(m -> "error".equals(m.optString("state"))
+                    || "playing".equals(m.optString("state")) && m.optDouble("pos", 0) > 1, "playing " + k[0]);
+            assertEquals(s.toString(), "playing", s.getString("state"));
+            assertEquals(s.toString(), 2, s.getJSONObject("tracks").getJSONArray("audio").length());
+            assertEquals(12.0, s.getDouble("dur"), 0.6);
+        }
     }
 
     @Test

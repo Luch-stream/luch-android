@@ -6,7 +6,12 @@ sides together.
 
 ## Layout
 
-- `android/app/src/main/java/ru/toxblh/luch/`: the receiver, plain Java, no dependencies in the APK.
+- `android/app/src/main/java/ru/toxblh/luch/`: the receiver, plain Java. The APK's only libraries are AndroidX
+  Media3 1.8 (ExoPlayer with HLS, DASH and Smooth Streaming; the last Media3 that runs on Android 5.0) for cast
+  media (`MediaActivity`), and in the github and play builds Jellyfin's `media3-ffmpeg-decoder` (prebuilt FFmpeg
+  sound decoders: DTS, TrueHD, AC-3 on TVs without the licence). F-Droid's build has no prebuilt native code, so not
+  the latter. Android's MediaPlayer played neither DASH nor HLS in fragmented MP4 or with separate sound tracks.
+  Mirroring decodes with MediaCodec itself and uses none of it.
   - `LuchService`: the always-on service; `ControlServer`: the control ports, plain 47800 (older senders, asked
     about every time) and TLS 47802 (pairing, PROTOCOL.md 3a).
   - `Identity` (the TV's certificate, key in the keystore), `Pairing` (the code check), `Gate` (who is paired,

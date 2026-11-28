@@ -350,7 +350,10 @@ sender   → {"t":"media_cmd","do":"play"|"pause"|"toggle"|"seek"|"skip"|"rate"|
 either   → {"t":"stop"}                   receiver adds "by":"receiver","reason":"back"|"ended" when it ends by itself
 ```
 
-- **What is played.** `src` lists the same content in one or more forms (the `<source>`s of a page, or the variants a
+- **What is played.** `welcome` lists the MIME types `media` plays in `media_types`; a receiver that plays DASH lists
+  `application/dash+xml` there (and Smooth Streaming `application/vnd.ms-sstr+xml`). A sender casts a DASH manifest
+  only to a receiver that lists it; older receivers (MediaPlayer) do not. `src` lists the same content in one or
+  more forms (the `<source>`s of a page, or the variants a
   site offers); the receiver plays the best one it can: a MIME type it can play, a codec it can decode (`decoders`),
   no bigger than its `max`, then the biggest. An HLS or DASH playlist is one `src`: the receiver picks its variant
   itself, up to its own screen, which is what makes a 4K video play in 4K from a sender with a 1080p screen.

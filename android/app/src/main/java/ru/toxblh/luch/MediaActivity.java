@@ -7,9 +7,6 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.media.MediaFormat;
-import android.media.MediaPlayer;
-import android.media.PlaybackParams;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -27,36 +24,52 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.annotation.OptIn;
+import androidx.media3.common.C;
+import androidx.media3.common.Format;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.PlaybackParameters;
+import androidx.media3.common.Player;
+import androidx.media3.common.TrackSelectionOverride;
+import androidx.media3.common.TrackSelectionParameters;
+import androidx.media3.common.Tracks;
+import androidx.media3.common.VideoSize;
+import androidx.media3.common.text.Cue;
+import androidx.media3.common.text.CueGroup;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.datasource.DefaultDataSource;
+import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
 /**
- * Plays a {@link MediaCast} full screen with the platform's MediaPlayer (no libraries in the APK): progressive files
- * and HLS, the receiver's own pick of quality. The remote: OK or Play/Pause toggles, left/right skip, up shows the
+ * Plays a {@link MediaCast} full screen with Media3's ExoPlayer: progressive files, HLS (MPEG-TS or fMP4, separate
+ * sound tracks), DASH and Smooth Streaming, the player's own pick of quality; FFmpeg's sound decoders where the build
+ * has them (not F-Droid's). The remote: OK or Play/Pause toggles, left/right skip, up shows the
  * controls, down (or Menu, or a long OK) the buttons for sound track, subtitles, quality and speed, Back stops. Every change goes back as {@code media_state}.
  */
-public class MediaActivity extends Activity implements SurfaceHolder.Callback {
+@OptIn(markerClass = UnstableApi.class)
+public class MediaActivity extends Activity implements SurfaceHolder.Callback, Player.Listener {
     private final BackGuard backGuard = new BackGuard();
     static final float[] RATES = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f};
     private static final long REPORT_MS = 5000, OSD_MS = 3000, LOAD_MS = 30_000;
-    private static final int MAX_SUB_BYTES = 2 * 1024 * 1024;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private MediaCast cast;
-    private MediaPlayer player;
+    private ExoPlayer player;
     private boolean prepared, surfaceReady, ended;
     private String state = "loading";
     /** The player waits for data while it should play: told as "loading", so a sender stops moving its clock. */
@@ -67,11 +80,8 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     private long resumeAt;
     private int videoW, videoH;
     private String lastBy = "receiver";
-    /** Our ids of the subtitle tracks the sender listed, in the order they were added to the player. */
-    private final List<String> externalSubs = new ArrayList<>();
-    private final List<String> externalLabels = new ArrayList<>();
-    private int firstExternal = -1;
-    private int subTrack = -1;
+    /** The labels of the subtitles the sender listed, by their ids. */
+    private final Map<String, String> senderSubs = new HashMap<>();
 
     private FrameLayout root;
     private SurfaceView surface;
@@ -205,10 +215,6 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         cast = m;
         ink.reset();
         releasePlayer();
-        externalSubs.clear();
-        externalLabels.clear();
-        firstExternal = -1;
-        subTrack = -1;
         quality = null;
         subAfterSwitch = null;
         ended = false;
@@ -233,31 +239,90 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     private void open() {
         MediaCast m = cast;
         if (m == null || player != null) return;
-        MediaPlayer p = new MediaPlayer();
-        player = p;
         prepared = false;
         try {
-            p.setDisplay(surface.getHolder());
-            p.setScreenOnWhilePlaying(true);
-            Map<String, String> headers = m.headers;
-            p.setDataSource(this, Uri.parse(quality != null ? quality : m.url), headers);
-            p.setOnPreparedListener(mp -> {
-                if (mp != player) return;
-                prepared = true;
+            Map<String, String> headers = new HashMap<>(m.headers);
+            DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                    .setConnectTimeoutMs(8000)
+                    .setReadTimeoutMs(15000)
+                    .setAllowCrossProtocolRedirects(true);
+            String agent = headers.remove("User-Agent");
+            if (agent != null) http.setUserAgent(agent);
+            http.setDefaultRequestProperties(headers);
+            // FFmpeg's sound decoders first where the build has them (DTS, TrueHD, AC-3 on a TV without the licence);
+            // the TV's own decoders otherwise, and for the picture.
+            DefaultRenderersFactory renderers = new DefaultRenderersFactory(this)
+                    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+                    .setEnableDecoderFallback(true);
+            ExoPlayer p = new ExoPlayer.Builder(this, renderers)
+                    .setMediaSourceFactory(new DefaultMediaSourceFactory(new DefaultDataSource.Factory(this, http)))
+                    .build();
+            player = p;
+            p.addListener(this);
+            p.setVideoSurfaceHolder(surface.getHolder());
+            // The sender's subtitles start switched off, as a file's own do.
+            p.setTrackSelectionParameters(p.getTrackSelectionParameters().buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build());
+            p.setPlaybackParameters(new PlaybackParameters(rate));
+            p.setMediaItem(item(m));
+            p.setPlayWhenReady(wantPlaying);
+            p.prepare();
+        } catch (RuntimeException e) {
+            fail(String.valueOf(e));
+        }
+    }
+
+    /** What to play: the chosen source with its kind (links often have no extension), and the sender's subtitles. */
+    private MediaItem item(MediaCast m) {
+        JSONObject q = currentQuality(m);
+        MediaItem.Builder b = new MediaItem.Builder().setUri(Uri.parse(quality != null ? quality : m.url));
+        String kind = MediaLink.streamMime(q.optString("mime"));
+        if (kind != null) b.setMimeType(kind);
+        List<MediaItem.SubtitleConfiguration> subs = new ArrayList<>();
+        senderSubs.clear();
+        for (int i = 0; i < m.subs.size(); i++) {
+            JSONObject s = m.subs.get(i);
+            String id = s.optString("id", "s" + i);
+            String label = s.optString("label", s.optString("lang", "#" + (i + 1)));
+            senderSubs.put(id, label);
+            subs.add(new MediaItem.SubtitleConfiguration.Builder(Uri.parse(s.optString("url")))
+                    .setMimeType(MediaLink.subtitleMime(s.optString("mime"), s.optString("url")))
+                    .setLanguage(s.optString("lang", null))
+                    .setLabel(label)
+                    .setId(id)
+                    .build());
+        }
+        return b.setSubtitleConfigurations(subs).build();
+    }
+
+    // ---- what the player says -----------------------------------------------------------------------------
+
+    @Override
+    public void onPlaybackStateChanged(int playbackState) {
+        ExoPlayer p = player;
+        if (p == null) return;
+        switch (playbackState) {
+            case Player.STATE_READY:
+                buffering = false;
                 message.setText("");
-                if (resumeAt > 0) seek(resumeAt);
-                applyRate();
-                if (wantPlaying) mp.start();
-                setState(wantPlaying ? "playing" : "paused");
-                loadSubs(m);
-            });
-            p.setOnVideoSizeChangedListener((mp, w, h) -> {
-                videoW = w;
-                videoH = h;
-                fit();
-            });
-            p.setOnCompletionListener(mp -> {
-                if (mp != player || ended) return;
+                if (!prepared) {
+                    prepared = true;
+                    // A live stream ignores where the page was in its own window of it.
+                    if (resumeAt > 0 && !p.isCurrentMediaItemLive()) seek(resumeAt);
+                    setState(wantPlaying ? "playing" : "paused");
+                } else {
+                    report(null);
+                }
+                break;
+            case Player.STATE_BUFFERING:
+                if (prepared) {
+                    buffering = true;
+                    message.setText(getString(R.string.media_loading));
+                    report(null);
+                }
+                break;
+            case Player.STATE_ENDED:
+                if (ended) return;
                 ended = true;
                 lastBy = "receiver";
                 setState("ended");
@@ -265,31 +330,44 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
                     if (cast != null) cast.endedHere("ended");
                     finish();
                 }, 1500);
-            });
-            p.setOnErrorListener((mp, what, extra) -> {
-                if (mp != player) return true;
-                fail("player error " + what + "/" + extra);
-                return true;
-            });
-            p.setOnInfoListener((mp, what, extra) -> {
-                if (mp != player) return false;
-                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
-                    message.setText(getString(R.string.media_loading));
-                    buffering = true;
-                    report(null);
-                }
-                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) {
-                    message.setText("");
-                    buffering = false;
-                    report(null);
-                }
-                return false;
-            });
-            p.setOnSeekCompleteListener(mp -> report(null));
-            p.setOnTimedTextListener((mp, text) -> subtitle.setText(text == null ? "" : text.getText()));
-            p.prepareAsync();
-        } catch (Exception e) {
-            fail(String.valueOf(e));
+                break;
+            default:
+                break;
+        }
+    }
+
+    @Override
+    public void onPlayerError(PlaybackException e) {
+        fail("player error " + e.getErrorCodeName() + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+    }
+
+    @Override
+    public void onVideoSizeChanged(VideoSize size) {
+        if (size.width <= 0 || size.height <= 0) return;
+        videoW = Math.round(size.width * size.pixelWidthHeightRatio);
+        videoH = size.height;
+        fit();
+    }
+
+    @Override
+    public void onCues(CueGroup cues) {
+        StringBuilder text = new StringBuilder();
+        for (Cue c : cues.cues) {
+            if (c.text == null) continue;
+            if (text.length() > 0) text.append('\n');
+            text.append(c.text);
+        }
+        subtitle.setText(text);
+    }
+
+    @Override
+    public void onTracksChanged(Tracks tracks) {
+        if (subAfterSwitch != null && prepared) {
+            String id = subAfterSwitch;
+            subAfterSwitch = null;
+            selectSub(id);
+        } else {
+            report(null);
         }
     }
 
@@ -304,73 +382,6 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
             if (m != null && m == cast) m.endedHere("error");
             finish();
         }, 3000);
-    }
-
-    /** Fetches the sender's subtitles (WebVTT made SubRip) and adds them; they start switched off. */
-    private void loadSubs(MediaCast m) {
-        if (m.subs.isEmpty()) {
-            report(null);
-            return;
-        }
-        new Thread(() -> {
-            List<String[]> files = new ArrayList<>();
-            for (int i = 0; i < m.subs.size(); i++) {
-                JSONObject s = m.subs.get(i);
-                try {
-                    String text = fetchText(s.optString("url"), m.headers);
-                    if (!text.isEmpty() && text.charAt(0) == 0xFEFF) text = text.substring(1); // a byte order mark
-                    boolean vtt = text.startsWith("WEBVTT")
-                            || "text/vtt".equals(s.optString("mime"));
-                    File f = new File(getCacheDir(), "sub" + i + ".srt");
-                    boolean ass = text.contains("[Events]") && text.contains("Dialogue:");
-                    String srt = ass ? MediaLink.assToSrt(text) : vtt ? MediaLink.vttToSrt(text) : text;
-                    try (FileOutputStream out = new FileOutputStream(f)) {
-                        out.write(srt.getBytes(StandardCharsets.UTF_8));
-                    }
-                    String label = s.optString("label", s.optString("lang", "#" + (i + 1)));
-                    files.add(new String[]{f.getPath(), s.optString("id", "s" + i), label});
-                } catch (Exception e) {
-                    Log.w(LuchService.TAG, "subtitle " + i + ": " + e);
-                }
-            }
-            main.post(() -> {
-                MediaPlayer p = player;
-                if (p == null || cast != m || !prepared) return;
-                firstExternal = trackCount();
-                for (String[] f : files) {
-                    try {
-                        p.addTimedTextSource(f[0], MediaPlayer.MEDIA_MIMETYPE_TEXT_SUBRIP);
-                        externalSubs.add(f[1]);
-                        externalLabels.add(f[2]);
-                    } catch (Exception e) {
-                        Log.w(LuchService.TAG, "subtitle add: " + e);
-                    }
-                }
-                if (subAfterSwitch != null) {
-                    selectSub(subAfterSwitch);
-                    subAfterSwitch = null;
-                }
-                report(null);
-            });
-        }, "luch-subs").start();
-    }
-
-    private static String fetchText(String url, Map<String, String> headers) throws java.io.IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(5000);
-        c.setReadTimeout(10000);
-        for (Map.Entry<String, String> h : headers.entrySet()) c.setRequestProperty(h.getKey(), h.getValue());
-        try (InputStream in = c.getInputStream()) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[16384];
-            for (int n; (n = in.read(buf)) > 0; ) {
-                out.write(buf, 0, n);
-                if (out.size() > MAX_SUB_BYTES) throw new java.io.IOException("subtitles too big");
-            }
-            return out.toString("UTF-8");
-        } finally {
-            c.disconnect();
-        }
     }
 
     // ---- commands, from the sender or from the remote --------------------------------------------------------
@@ -422,59 +433,59 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
 
     private void play(boolean on) {
         wantPlaying = on;
-        MediaPlayer p = player;
+        ExoPlayer p = player;
         if (p == null || !prepared || ended) return;
-        if (on) {
-            p.start();
-            applyRate();
-        } else {
-            p.pause();
-        }
+        p.setPlayWhenReady(on);
         setState(on ? "playing" : "paused");
     }
 
     private void seek(long ms) {
-        MediaPlayer p = player;
+        ExoPlayer p = player;
         if (p == null || !prepared) {
             resumeAt = Math.max(0, ms);
             return;
         }
+        // A live stream is not sought in: a page's player sends where it was in its own window of it.
         long dur = p.getDuration();
-        // A live stream has no duration, and seeking in it ends playback with error -38 (a page's player sends where
-        // it was in its own window of the stream).
-        if (dur <= 0) return;
+        if (p.isCurrentMediaItemLive() || dur == C.TIME_UNSET) return;
         long to = Math.max(0, Math.min(ms, dur - 500));
-        if (Build.VERSION.SDK_INT >= 26) p.seekTo(to, MediaPlayer.SEEK_CLOSEST);
-        else p.seekTo((int) to);
+        p.seekTo(to);
         if (ended && to < dur - 1000) ended = false;
     }
 
-    /** MediaPlayer starts playing when given a speed, so a paused video keeps its speed until it plays. */
     private void applyRate() {
-        MediaPlayer p = player;
-        if (p == null || !prepared || Build.VERSION.SDK_INT < 23 || !wantPlaying) return;
-        try {
-            PlaybackParams params = p.getPlaybackParams();
-            p.setPlaybackParams(params.setSpeed(rate));
-        } catch (RuntimeException e) {
-            Log.w(LuchService.TAG, "speed " + rate + ": " + e);
-            rate = 1f;
-        }
+        ExoPlayer p = player;
+        if (p != null) p.setPlaybackParameters(new PlaybackParameters(rate));
     }
 
-    private int trackCount() {
-        try {
-            return player.getTrackInfo().length;
-        } catch (RuntimeException e) {
-            return 0;
+    /** The groups of one kind of track (audio or text), in the player's order: their index is our track id. */
+    private List<Tracks.Group> groups(int type) {
+        List<Tracks.Group> out = new ArrayList<>();
+        ExoPlayer p = player;
+        if (p == null) return out;
+        for (Tracks.Group g : p.getCurrentTracks().getGroups()) if (g.getType() == type) out.add(g);
+        return out;
+    }
+
+    /** A text group's id: the sender's own for a subtitle it listed, "t<n>" for one in the stream. */
+    private String subId(Tracks.Group g, int n) {
+        String id = g.getTrackFormat(0).id;
+        if (id != null) {
+            // Side-loaded tracks' ids come with the player's own prefix ("1:s0").
+            String bare = id.substring(id.lastIndexOf(':') + 1);
+            if (senderSubs.containsKey(bare)) return bare;
+            if (senderSubs.containsKey(id)) return id;
         }
+        return "t" + n;
     }
 
     private void selectAudio(String id) {
-        MediaPlayer p = player;
+        ExoPlayer p = player;
         if (p == null || !prepared || id == null || !id.startsWith("a")) return;
         try {
-            p.selectTrack(Integer.parseInt(id.substring(1)));
+            Tracks.Group g = groups(C.TRACK_TYPE_AUDIO).get(Integer.parseInt(id.substring(1)));
+            p.setTrackSelectionParameters(p.getTrackSelectionParameters().buildUpon()
+                    .setOverrideForType(new TrackSelectionOverride(g.getMediaTrackGroup(), 0)).build());
         } catch (RuntimeException e) {
             Log.w(LuchService.TAG, "audio track " + id + ": " + e);
         }
@@ -482,38 +493,22 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     private void selectSub(String id) {
-        MediaPlayer p = player;
+        ExoPlayer p = player;
         if (p == null || !prepared) return;
-        try {
-            if (subTrack >= 0) p.deselectTrack(subTrack);
-        } catch (RuntimeException ignored) {
-        }
-        subTrack = -1;
         subtitle.setText("");
-        int index = subIndex(id);
-        if (index >= 0) {
-            try {
-                p.selectTrack(index);
-                subTrack = index;
-            } catch (RuntimeException e) {
-                Log.w(LuchService.TAG, "subtitle track " + id + ": " + e);
-            }
+        TrackSelectionParameters.Builder b = p.getTrackSelectionParameters().buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT);
+        Tracks.Group chosen = null;
+        List<Tracks.Group> text = groups(C.TRACK_TYPE_TEXT);
+        for (int i = 0; id != null && i < text.size(); i++) if (id.equals(subId(text.get(i), i))) chosen = text.get(i);
+        if (chosen == null) {
+            b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true);
+        } else {
+            b.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setOverrideForType(new TrackSelectionOverride(chosen.getMediaTrackGroup(), 0));
         }
+        p.setTrackSelectionParameters(b.build());
         report(null);
-    }
-
-    /** The player's track for one of our subtitle ids: the sender's own ids, or "t<n>" for one in the file. */
-    private int subIndex(String id) {
-        if (id == null) return -1;
-        int ext = externalSubs.indexOf(id);
-        if (ext >= 0) return firstExternal + ext;
-        if (id.startsWith("t")) {
-            try {
-                return Integer.parseInt(id.substring(1));
-            } catch (NumberFormatException ignored) {
-            }
-        }
-        return -1;
     }
 
     // ---- reporting -------------------------------------------------------------------------------------------
@@ -525,29 +520,22 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     private long position() {
-        MediaPlayer p = player;
-        if (p == null || !prepared) return resumeAt;
-        try {
-            return p.getCurrentPosition();
-        } catch (RuntimeException e) {
-            return resumeAt;
-        }
+        ExoPlayer p = player;
+        return p == null || !prepared ? resumeAt : p.getCurrentPosition();
     }
 
+    /** The length in ms; -1 when unknown, and for a live stream (its window is no length to show). */
     private long duration() {
-        MediaPlayer p = player;
-        if (p == null || !prepared) return -1;
-        try {
-            return p.getDuration();
-        } catch (RuntimeException e) {
-            return -1;
-        }
+        ExoPlayer p = player;
+        if (p == null || !prepared || p.isCurrentMediaItemLive()) return -1;
+        long d = p.getDuration();
+        return d == C.TIME_UNSET ? -1 : d;
     }
 
     /** One {@code media_state} line (PROTOCOL.md section 4b) to the sender that started it. */
     JSONObject stateJson(String detail) throws JSONException {
         long dur = duration();
-        boolean live = prepared && dur <= 0;
+        boolean live = prepared && player != null && player.isCurrentMediaItemLive();
         JSONObject s = new JSONObject()
                 .put("t", "media_state")
                 .put("state", buffering && "playing".equals(state) ? "loading" : state)
@@ -559,33 +547,20 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         if (videoW > 0) s.put("w", videoW).put("h", videoH);
         JSONArray audio = new JSONArray(), subs = new JSONArray();
         String selAudio = null, selSub = null;
-        MediaPlayer p = player;
-        if (p != null && prepared) {
-            try {
-                MediaPlayer.TrackInfo[] tracks = p.getTrackInfo();
-                int a = -1;
-                try {
-                    a = p.getSelectedTrack(MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO);
-                } catch (RuntimeException ignored) {
-                }
-                for (int i = 0; i < tracks.length; i++) {
-                    MediaPlayer.TrackInfo t = tracks[i];
-                    String lang = t.getLanguage();
-                    if ("und".equals(lang)) lang = "";
-                    if (t.getTrackType() == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_AUDIO) {
-                        audio.put(new JSONObject().put("id", "a" + i).put("lang", lang).put("label", trackLabel(t, i)));
-                        if (i == a) selAudio = "a" + i;
-                    } else if (t.getTrackType() == MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_TIMEDTEXT) {
-                        int ext = firstExternal >= 0 ? i - firstExternal : -1;
-                        boolean ours = ext >= 0 && ext < externalSubs.size();
-                        String id = ours ? externalSubs.get(ext) : "t" + i;
-                        String label = ours ? externalLabels.get(ext) : trackLabel(t, i);
-                        subs.put(new JSONObject().put("id", id).put("lang", lang).put("label", label));
-                        if (i == subTrack) selSub = id;
-                    }
-                }
-            } catch (RuntimeException e) {
-                Log.w(LuchService.TAG, "tracks: " + e);
+        if (player != null && prepared) {
+            List<Tracks.Group> a = groups(C.TRACK_TYPE_AUDIO);
+            for (int i = 0; i < a.size(); i++) {
+                Format f = a.get(i).getTrackFormat(0);
+                audio.put(new JSONObject().put("id", "a" + i).put("lang", lang(f)).put("label", trackLabel(f, i)));
+                if (a.get(i).isSelected()) selAudio = "a" + i;
+            }
+            List<Tracks.Group> t = groups(C.TRACK_TYPE_TEXT);
+            for (int i = 0; i < t.size(); i++) {
+                Format f = t.get(i).getTrackFormat(0);
+                String id = subId(t.get(i), i);
+                String label = senderSubs.containsKey(id) ? senderSubs.get(id) : trackLabel(f, i);
+                subs.put(new JSONObject().put("id", id).put("lang", lang(f)).put("label", label));
+                if (t.get(i).isSelected()) selSub = id;
             }
         }
         s.put("tracks", new JSONObject().put("audio", audio).put("sub", subs));
@@ -595,9 +570,15 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         return s;
     }
 
-    private static String trackLabel(MediaPlayer.TrackInfo t, int i) {
-        String lang = t.getLanguage();
-        if (lang == null || lang.isEmpty() || "und".equals(lang)) return "#" + i;
+    private static String lang(Format f) {
+        String l = f.language;
+        return l == null || "und".equals(l) ? "" : l;
+    }
+
+    private static String trackLabel(Format f, int i) {
+        if (f.label != null && !f.label.isEmpty()) return f.label;
+        String lang = lang(f);
+        if (lang.isEmpty()) return "#" + i;
         Locale l = new Locale(lang);
         String name = l.getDisplayLanguage();
         return name.isEmpty() ? lang : name;
@@ -753,10 +734,6 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
         if (prepared) resumeAt = position();
         quality = url;
         releasePlayer();
-        externalSubs.clear();
-        externalLabels.clear();
-        firstExternal = -1;
-        subTrack = -1;
         subtitle.setText("");
         state = "loading";
         buffering = false;
@@ -974,7 +951,7 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     public void surfaceCreated(SurfaceHolder holder) {
         surfaceReady = true;
         if (player == null) open();
-        else player.setDisplay(holder);
+        else player.setVideoSurfaceHolder(holder);
     }
 
     @Override
@@ -998,14 +975,12 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback {
     }
 
     private void releasePlayer() {
-        MediaPlayer p = player;
+        ExoPlayer p = player;
         player = null;
         prepared = false;
         if (p != null) {
-            try {
-                p.release();
-            } catch (RuntimeException ignored) {
-            }
+            p.removeListener(this);
+            p.release();
         }
     }
 

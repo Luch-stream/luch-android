@@ -13,7 +13,8 @@ def debugSign = project.hasProperty('luchDebugSign')
 
 android {
     namespace 'ru.toxblh.luch'
-    compileSdk 34
+    // Media3's libraries are built against API 35; the app still targets 34 and runs from 21.
+    compileSdk 35
 
     defaultConfig {
         applicationId 'ru.toxblh.luch'
@@ -104,8 +105,21 @@ android {
     }
 }
 
-// Only for the on-device tests (./gradlew connectedAndroidTest on an emulator); nothing of it goes into the APK.
 dependencies {
+    // The media player (PROTOCOL.md 4b): HLS with fMP4 and separate audio, DASH, Smooth Streaming and the rest that
+    // Android's MediaPlayer cannot play. 1.8 is the last Media3 that still runs on Android 5.0 (minSdk 21).
+    def media3 = '1.8.0'
+    implementation "androidx.media3:media3-exoplayer:$media3"
+    implementation "androidx.media3:media3-exoplayer-hls:$media3"
+    implementation "androidx.media3:media3-exoplayer-dash:$media3"
+    implementation "androidx.media3:media3-exoplayer-smoothstreaming:$media3"
+    implementation "androidx.media3:media3-datasource:$media3"
+    // FFmpeg's audio decoders (DTS, TrueHD, AC-3/E-AC-3 on TVs without those licences, and the rest), a prebuilt
+    // native library: not in the F-Droid build, which takes no prebuilt binaries and plays what the TV decodes.
+    githubImplementation 'org.jellyfin.media3:media3-ffmpeg-decoder:1.8.0+1'
+    playImplementation 'org.jellyfin.media3:media3-ffmpeg-decoder:1.8.0+1'
+
+    // Only for the on-device tests (./gradlew connectedAndroidTest on an emulator); nothing of it goes into the APK.
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
     // JVM tests of the logic that needs no device (./gradlew testFdroidDebugUnitTest); org.json is the real one,

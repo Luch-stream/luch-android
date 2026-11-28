@@ -92,13 +92,15 @@ public class MediaLinkTest {
     public void skipsCodecsAndTypesItCannotPlay() throws Exception {
         JSONArray s = new JSONArray()
                 .put(src("av1", "video/mp4", 3840, 2160, "av01.0.12M.10"))
-                .put(src("dash", "application/dash+xml", 3840, 2160, null))
+                .put(src("flv", "video/x-flv", 3840, 2160, null))
                 .put(src("vp9", "video/webm", 2560, 1440, "vp9"))
                 .put(src("avc", "video/mp4", 1920, 1080, "avc"));
         assertEquals("avc", MediaLink.pick(s, AVC_HEVC, 3840, 2160).optString("url"));
         List<String> withVp9 = Arrays.asList("video/avc", "video/x-vnd.on2.vp9");
         assertEquals("vp9", MediaLink.pick(s, withVp9, 3840, 2160).optString("url"));
-        assertNull(MediaLink.pick(new JSONArray().put(src("d", "application/dash+xml", 0, 0, null)), AVC_HEVC, 3840, 2160));
+        assertNull(MediaLink.pick(new JSONArray().put(src("f", "video/x-flv", 0, 0, null)), AVC_HEVC, 3840, 2160));
+        // DASH plays since the player is Media3.
+        assertEquals("d", MediaLink.pick(new JSONArray().put(src("d", "application/dash+xml", 0, 0, null)), AVC_HEVC, 3840, 2160).optString("url"));
     }
 
     @Test
@@ -117,7 +119,8 @@ public class MediaLinkTest {
         JSONArray bare = new JSONArray().put(new JSONObject().put("url", "x"));
         assertEquals("x", MediaLink.pick(bare, AVC_HEVC, 1920, 1080).optString("url"));
         assertTrue(MediaLink.playable("video/mp4; codecs=\"avc1\""));
-        assertFalse(MediaLink.playable("application/dash+xml"));
+        assertTrue(MediaLink.playable("application/dash+xml"));
+        assertFalse(MediaLink.playable("application/pdf"));
     }
 
     @Test
@@ -157,29 +160,16 @@ public class MediaLinkTest {
     }
 
     @Test
-    public void webVttBecomesSubRip() {
-        String vtt = "WEBVTT\n\nNOTE a comment\n\n1\n00:01.000 --> 00:02.500 align:start\n<v Bob>Hello</v>\n\n"
-                + "01:00:00.250 --> 01:00:01.000\nSecond\nline\n";
-        String srt = MediaLink.vttToSrt(vtt);
-        assertEquals("1\n00:00:01,000 --> 00:00:02,500\nHello\n\n"
-                + "2\n01:00:00,250 --> 01:00:01,000\nSecond\nline\n\n", srt);
-    }
-
-    @Test
-    public void times() {
-        assertEquals("00:00:05,000", MediaLink.time("00:05"));
-        assertEquals("00:01:02,500", MediaLink.time("01:02.5"));
-        assertEquals("02:03:04,050", MediaLink.time("2:03:04.050"));
-        assertNull(MediaLink.time("soon"));
-    }
-
-    @Test
-    public void assBecomesSubRip() {
-        String ass = "[Script Info]\nTitle: x\n\n[V4+ Styles]\nFormat: Name, Fontname\nStyle: Default,Arial\n\n"
-                + "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-                + "Dialogue: 0,0:00:05.00,0:00:07.50,Default,,0,0,0,,{\\i1}Second{\\i0}, with a comma\\Nline two\n"
-                + "Dialogue: 0,0:00:01.20,0:00:03.00,Default,,0,0,0,,First\n";
-        assertEquals("1\n00:00:01,200 --> 00:00:03,000\nFirst\n\n"
-                + "2\n00:00:05,000 --> 00:00:07,500\nSecond, with a comma\nline two\n\n", MediaLink.assToSrt(ass));
+    public void streamsAndSubtitlesAreNamedForThePlayer() {
+        assertEquals("application/x-mpegURL", MediaLink.streamMime("application/vnd.apple.mpegurl"));
+        assertEquals("application/dash+xml", MediaLink.streamMime("application/dash+xml"));
+        assertEquals("application/vnd.ms-sstr+xml", MediaLink.streamMime("application/vnd.ms-sstr+xml"));
+        assertNull(MediaLink.streamMime("video/mp4"));
+        assertNull(MediaLink.streamMime(""));
+        assertEquals("text/vtt", MediaLink.subtitleMime("text/vtt", "http://192.168.1.2:47810/t/en.vtt"));
+        assertEquals("application/x-subrip", MediaLink.subtitleMime("", "https://cdn.example/s/ep1.srt?x=1"));
+        assertEquals("text/x-ssa", MediaLink.subtitleMime("", "https://cdn.example/s/ep1.ass"));
+        // A link that says nothing about itself: the web's own kind.
+        assertEquals("text/vtt", MediaLink.subtitleMime(null, "https://cdn.example/s?id=1"));
     }
 }
