@@ -41,6 +41,7 @@ import androidx.media3.common.text.CueGroup;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
+import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.Renderer;
@@ -350,7 +351,14 @@ public class MediaActivity extends Activity implements SurfaceHolder.Callback, P
 
     @Override
     public void onPlayerError(PlaybackException e) {
-        fail("player error " + e.getErrorCodeName() + (e.getMessage() == null ? "" : ": " + e.getMessage()));
+        // A refused piece says which host and what status (the whole link may carry a token, so not the link).
+        Throwable c = e.getCause();
+        if (c instanceof HttpDataSource.InvalidResponseCodeException) {
+            HttpDataSource.InvalidResponseCodeException h = (HttpDataSource.InvalidResponseCodeException) c;
+            fail("HTTP " + h.responseCode + " from " + h.dataSpec.uri.getHost());
+            return;
+        }
+        fail("player error " + e.getErrorCodeName() + (c == null || c.getMessage() == null ? "" : ": " + c.getMessage()));
     }
 
     @Override
