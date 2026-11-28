@@ -234,7 +234,8 @@ Modelled on Sunshine and Moonlight: UDP, no jitter buffer, loss answered with a 
 
 ```
 sender   → {"t":"start","mode":"mirror","video":{"codec":"video/hevc","width":1920,"height":1080,"fps":60},
-            "audio":{"codec":"audio/opus","rate":48000,"channels":2,"frame_ms":5,"sync":false}}
+            "audio":{"codec":"audio/opus","rate":48000,"channels":2,"frame_ms":5,"sync":false},
+            "watch_device":true}                             optional: the heat badge on the TV (section 5)
 receiver → {"t":"ready","video_port":P,"audio_port":Q,       or {"t":"error","code":"start_failed","detail":"..."}
             "crypt":"aes-128-gcm","key":"<base64, 16 bytes>"}  over TLS only: the media key of this session
 receiver → {"t":"keyframe"}                                 an IDR is needed (start, or after a loss)
@@ -797,8 +798,14 @@ charging"), or no battery. A sender counts the device on battery only with `batt
 `charging` is sent immediately when the cable goes in or out, and `thermal`, `power_save` and `interactive`
 on every change, all in the same `stats` line that already flows once a second.
 `thermal_headroom` in `stats` (and `headroom` in `hw.device`) is optional and cached for ten seconds:
-0 means low thermal load, 1 means the severe throttling threshold, and values can exceed 1.
-The heat badge appears at 0.7 or higher, or at a thermal status of moderate or worse.
+0 means low thermal load, 1 means the severe throttling threshold, and values can exceed 1: higher is hotter.
+The device counts as hot at 0.7 or higher, or at a thermal status of moderate or worse; senders use the same rule.
+
+**Watching the device is opt-in.** The receiver reports the fields above to every sender (reporting costs nothing),
+but shows its heat badge (🔥 in a corner over the picture) only in a session whose `start` carried
+`"watch_device":true`. Missing or false means no badge, which is what older senders get. Senders keep it off unless
+their person turns on "Watch the TV's heat and battery", and with it off say nothing about the TV's battery or heat
+in their menus and status lines (numbers in a details view or a command's raw stats are fine).
 
 The receiver measures by itself after install, an app update or a firmware update, and at a sender's first hello
 when there is no result yet, but only while nothing plays (a video would lose its decoder); then it sends

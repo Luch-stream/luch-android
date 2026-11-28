@@ -446,23 +446,51 @@ public class StatusActivity extends Activity {
         }
         content.addView(chips, Ui.below(this, 0));
         spacer();
-        LinearLayout sound = new LinearLayout(this);
-        sound.setGravity(Gravity.CENTER_VERTICAL);
-        sound.setBackground(Ui.round(this, tvMode ? Ui.CARD_HIGH : Ui.CARD, 28, 0));
-        sound.setPadding(dp(20), dp(16), dp(20), dp(16));
-        sound.addView(Ui.text(this, getString(R.string.sound_label), 17, Ui.TEXT, false), new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        // The sender's two switches in one card: two cards did not fit a TV's panel.
+        LinearLayout options = new LinearLayout(this);
+        options.setOrientation(LinearLayout.VERTICAL);
+        options.setBackground(Ui.round(this, tvMode ? Ui.CARD_HIGH : Ui.CARD, 28, 0));
+        options.setPadding(dp(20), dp(4), dp(20), dp(4));
+        LinearLayout sound = optionRow(getString(R.string.sound_label));
         if (Build.VERSION.SDK_INT >= 29) {
-            Switch sw = new Switch(this);
-            sw.setTrackDrawable(getResources().getDrawable(R.drawable.switch_track));
-            sw.setThumbDrawable(getResources().getDrawable(R.drawable.switch_thumb));
-            sw.setChecked(getSharedPreferences("luch", MODE_PRIVATE).getBoolean("send_audio", true));
-            sw.setOnCheckedChangeListener((b, on) -> getSharedPreferences("luch", MODE_PRIVATE).edit().putBoolean("send_audio", on).apply());
-            sound.addView(sw);
+            sound.addView(optionSwitch(getSharedPreferences("luch", MODE_PRIVATE).getBoolean("send_audio", true),
+                    on -> getSharedPreferences("luch", MODE_PRIVATE).edit().putBoolean("send_audio", on).apply()));
         } else {
             sound.addView(Ui.text(this, getString(R.string.sound_android10), 15, Ui.MUTED, false));
         }
-        content.addView(sound, Ui.below(this, 20));
+        options.addView(sound);
+        View line = new View(this);
+        line.setBackgroundColor(Ui.DIVIDER);
+        options.addView(line, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        // Off by default: a hot TV then shows no badge over the picture (PROTOCOL.md 5, watch_device).
+        LinearLayout watch = optionRow(getString(R.string.watch_device_label));
+        watch.addView(optionSwitch(Sender.watchDevice(this), on -> getSharedPreferences("luch", MODE_PRIVATE).edit()
+                .putBoolean(Sender.WATCH_DEVICE, on).apply()));
+        options.addView(watch);
+        content.addView(options, Ui.below(this, 20));
+    }
+
+    /** A row of the sender's options card: its words, then what changes it. */
+    private LinearLayout optionRow(String label) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(12), 0, dp(12));
+        row.addView(Ui.text(this, label, 17, Ui.TEXT, false), new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        return row;
+    }
+
+    private interface Toggle {
+        void set(boolean on);
+    }
+
+    private Switch optionSwitch(boolean on, Toggle toggle) {
+        Switch sw = new Switch(this);
+        sw.setTrackDrawable(getResources().getDrawable(R.drawable.switch_track));
+        sw.setThumbDrawable(getResources().getDrawable(R.drawable.switch_thumb));
+        sw.setChecked(on);
+        sw.setOnCheckedChangeListener((b, checked) -> toggle.set(checked));
+        return sw;
     }
 
     private String codecPref() {

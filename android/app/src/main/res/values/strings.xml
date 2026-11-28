@@ -75,6 +75,7 @@
     <string name="video_label">Video</string>
     <string name="codec_auto">Auto</string>
     <string name="sound_label">Send this device\'s sound</string>
+    <string name="watch_device_label">Watch the TV\'s heat and battery</string>
     <string name="soon">coming soon</string>
     <string name="state_sending">Showing</string>
     <string name="action_stop_send">Stop showing</string>

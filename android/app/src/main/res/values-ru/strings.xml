@@ -74,6 +74,7 @@
     <string name="video_label">Видео</string>
     <string name="codec_auto">Авто</string>
     <string name="sound_label">Передавать звук устройства</string>
+    <string name="watch_device_label">Следить за нагревом и батареей ТВ</string>
     <string name="soon">в ожидании</string>
     <string name="state_sending">Идёт показ</string>
     <string name="action_stop_send">Остановить показ</string>

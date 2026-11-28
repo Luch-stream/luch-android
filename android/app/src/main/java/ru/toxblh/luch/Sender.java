@@ -48,6 +48,14 @@ final class Sender {
         return s != null && !s.ended;
     }
 
+    /** The preference of "Watch the TV's heat and battery"; off until chosen. */
+    static final String WATCH_DEVICE = "watch_device";
+
+    /** Whether a start asks the receiver for its heat badge (PROTOCOL.md 5). */
+    static boolean watchDevice(Context context) {
+        return context.getSharedPreferences("luch", Context.MODE_PRIVATE).getBoolean(WATCH_DEVICE, false);
+    }
+
     /** The figures of the last second, for the screen. */
     static final class Live {
         final String codec, res, encoder, peerName, peerAddress;
@@ -258,6 +266,7 @@ final class Sender {
             JSONObject start = new JSONObject().put("t", "start").put("mode", "mirror").put("video", new JSONObject()
                     .put("codec", mime).put("width", size[0]).put("height", size[1]).put("fps", FPS));
             if (wantAudio) start.put("audio", audioSpec());
+            if (watchDevice(context)) start.put("watch_device", true);
             JSONObject ready = link.request(start, "ready", pairUi());
             int port = ready.getInt("video_port");
             audioPort = ready.optInt("audio_port");
@@ -410,6 +419,7 @@ final class Sender {
             JSONObject again = new JSONObject().put("t", "start").put("mode", "mirror").put("video", new JSONObject()
                     .put("codec", mime).put("width", size[0]).put("height", size[1]).put("fps", FPS));
             if (feed != null) again.put("audio", audioSpec());
+            if (watchDevice(context)) again.put("watch_device", true);
             send(again);
             long until = SystemClock.elapsedRealtime() + 4000;
             while (readyPort == 0 && !ended && SystemClock.elapsedRealtime() < until) SystemClock.sleep(20);

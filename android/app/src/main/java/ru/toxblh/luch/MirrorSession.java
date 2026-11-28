@@ -88,6 +88,11 @@ final class MirrorSession {
      * where audio cannot be made short (Android 5 and 6, see Caps.limits); costs that much picture latency.
      */
     private final boolean audioSync;
+    /**
+     * {"watch_device":true}: the sender asked for the heat badge over the picture (PROTOCOL.md 5). Missing means no:
+     * the device fields are reported either way, only the badge waits to be asked for.
+     */
+    final boolean watchDevice;
     /** Set once the audio track exists: how far behind the picture its sound comes out, and the picture's hold. */
     private volatile int audioLatencyMs;
     private volatile long videoHoldNs;
@@ -213,6 +218,7 @@ final class MirrorSession {
         audioChannels = a == null ? 0 : a.optInt("channels", 2);
         audioFrameMs = a == null ? 5 : a.optInt("frame_ms", 5);
         audioSync = a != null && a.optBoolean("sync", false);
+        watchDevice = start.optBoolean("watch_device", false);
         senderApp = start.optString("_app"); // put there by the control server from the sender's hello
         input = new InputLink(control, start.optBoolean("_input"), start.optString("_name"));
         audioOnly = "audio".equals(start.optString("mode"));
@@ -1287,7 +1293,7 @@ final class MirrorSession {
                 // Thermal headroom rises toward 1.0 before severe throttling, so a sender can warn early.
                 double headroom = DeviceState.headroom(context);
                 if (headroom >= 0) s.put("thermal_headroom", Math.round(headroom * 100) / 100.0);
-                MirrorActivity.setHot(DeviceState.isHot(headroom));
+                MirrorActivity.setHot(watchDevice && DeviceState.isHot(headroom));
                 // Battery, charging and thermal ride along only when they change, never on a timer.
                 JSONObject device = DeviceState.changed();
                 java.util.Iterator<String> keys = device.keys();

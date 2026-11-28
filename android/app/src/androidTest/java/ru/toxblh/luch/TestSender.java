@@ -266,6 +266,8 @@ final class TestSender {
 
     /** A start's "group" (PROTOCOL.md 4k), null for none: what an older sender sends. */
     JSONObject group;
+    /** A start's "watch_device" (PROTOCOL.md 5): false sends none, as an older sender. */
+    boolean watchDevice;
 
     JSONObject startCodec(String mime, JSONObject audio) throws Exception {
         codec = mime;
@@ -274,6 +276,7 @@ final class TestSender {
                         .put("fps", 30));
         if (audio != null) start.put("audio", audio);
         if (group != null) start.put("group", group);
+        if (watchDevice) start.put("watch_device", true);
         send(start);
         JSONObject ready = next(5_000);
         assertEquals("ready: " + ready, "ready", ready.getString("t"));
