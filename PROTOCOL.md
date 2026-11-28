@@ -370,7 +370,8 @@ either   → {"t":"stop"}                   receiver adds "by":"receiver","reaso
   playing; between them the sender moves `pos` on by `rate` × elapsed time. `"do":"state"` asks for one now. `by` says who caused the change (the
   remote or a `media_cmd`), so a sender can show "paused on the TV". `dur` is `null` for a live stream (`live:true`).
   While it waits for data in the middle of playing, the state is `loading` again, so a sender's clock stops too. A
-  live stream ignores `start` and `seek` (the position a page's player had in its own window of it).
+  live stream ignores `start` and `seek` (the position a page's player had in its own window of it), and its `pos`
+  is how far it has played since it started on this receiver.
 - **On the TV.** OK or Play/Pause toggles, left/right skip 10 s (held: the target moves on, 30 s steps after a while,
   and the seek happens when the key is let go), up shows the controls, down opens the list of speeds, the menu key or a
   long OK opens speed, sound track and subtitles, Back stops. The controls hide after 3 s.
