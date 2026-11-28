@@ -1160,8 +1160,12 @@ final class MirrorSession {
         // Device state is reported by the receiver only when it changes; this is the cached view.
         JSONObject d = DeviceState.snapshot(context);
         int battery = d.optInt("battery", -1);
-        b.append("battery ").append(battery >= 0 ? battery + "%" : "?");
-        b.append(d.optBoolean("charging", false) ? " charging" : " on battery");
+        if (battery >= 0) {
+            b.append("battery ").append(battery).append('%');
+            b.append(d.optBoolean("charging", false) ? " charging" : " on battery");
+        } else {
+            b.append("no battery");
+        }
         if (d.optInt("charge_mah", -1) > 0) b.append(" (").append(d.optInt("charge_mah")).append(" mAh)");
         b.append(" · thermal ").append(d.optString("thermal", "?"));
         double headroom = d.optDouble("headroom", -1);

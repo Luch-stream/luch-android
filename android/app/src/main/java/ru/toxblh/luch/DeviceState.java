@@ -123,12 +123,29 @@ final class DeviceState {
         thermalListener = null;
     }
 
+    /**
+     * The battery's percent, or -1 when there is none. A TV on mains power often reports a level too, with no battery
+     * present ({@code EXTRA_PRESENT} false): that is no battery at all, not one at that level.
+     */
+    static int batteryPercent(boolean present, int level, int scale) {
+        return present && scale > 0 && level >= 0 ? Math.round(level * 100f / scale) : -1;
+    }
+
+    /**
+     * On power: plugged in, whatever the status says (a full battery, or a TV's "not charging" and "unknown"), or no
+     * battery at all. Sent as {@code charging}; a sender counts "on battery" only with a battery and not this.
+     */
+    static boolean onPower(boolean present, int status, int plugged) {
+        return !present || plugged != 0 || status == BatteryManager.BATTERY_STATUS_CHARGING
+                || status == BatteryManager.BATTERY_STATUS_FULL;
+    }
+
     private static void applyBattery(Intent intent) {
+        boolean present = intent.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true);
         int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
         int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
         int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
-        boolean plugged = status == BatteryManager.BATTERY_STATUS_CHARGING
-                || status == BatteryManager.BATTERY_STATUS_FULL;
+        boolean plugged = onPower(present, status, intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0));
         // Read the counter once per broadcast, not on a timer: it makes the 100 mAh tolerance possible.
         int microAmpHours = -1;
         if (batteryManager != null) {
@@ -138,8 +155,8 @@ final class DeviceState {
             }
         }
         synchronized (LOCK) {
-            battery = scale > 0 && level >= 0 ? Math.round(level * 100f / scale) : -1;
-            chargeMah = microAmpHours > 0 ? microAmpHours / 1000 : -1;
+            battery = batteryPercent(present, level, scale);
+            chargeMah = present && microAmpHours > 0 ? microAmpHours / 1000 : -1;
             charging = plugged;
         }
     }

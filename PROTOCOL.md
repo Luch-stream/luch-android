@@ -791,6 +791,9 @@ change**. A sender must keep the last value it saw and must not assume the field
 
 `battery` (percent) and `charge_mah` (milliamp-hours, when the device exposes a charge counter) are sent
 with a hysteresis: only when the counter moved by 100 mAh (or 3 percentage points if there is no counter).
+A device without a battery (Android's `EXTRA_PRESENT` false: most TVs on mains power, which still report a level)
+sends no `battery` at all. `charging` means on power: plugged in whatever the battery's status says (full, "not
+charging"), or no battery. A sender counts the device on battery only with `battery` present and `charging` false.
 `charging` is sent immediately when the cable goes in or out, and `thermal`, `power_save` and `interactive`
 on every change, all in the same `stats` line that already flows once a second.
 `thermal_headroom` in `stats` (and `headroom` in `hw.device`) is optional and cached for ten seconds:
